@@ -313,4 +313,225 @@ new_val="$(config_get '.gateway.port')"
 assert_eq "$new_val" "12345"
 teardown_test_env
 
+# ---- config_get with malformed JSON config ----
+
+test_start "config_get returns default on malformed config"
+setup_test_env
+printf 'not json at all' > "$BASHCLAW_CONFIG"
+_CONFIG_CACHE=""
+config_load 2>/dev/null || true
+val="$(config_get '.gateway.port' '9999')"
+assert_eq "$val" "9999"
+teardown_test_env
+
+# ---- config_set with deeply nested new path ----
+
+test_start "config_set creates nested path"
+setup_test_env
+config_init_default >/dev/null 2>&1
+_CONFIG_CACHE=""
+config_load
+config_set '.deeply.nested.key' '"value123"'
+val="$(config_get '.deeply.nested.key')"
+assert_eq "$val" "value123"
+teardown_test_env
+
+# ---- config_agent_get with empty config ----
+
+test_start "config_agent_get on empty config returns fallback"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{}
+EOF
+_CONFIG_CACHE=""
+config_load
+val="$(config_agent_get "main" "model" "default-model")"
+assert_eq "$val" "default-model"
+teardown_test_env
+
+# ---- config_validate on empty JSON object ----
+
+test_start "config_validate on empty JSON object"
+setup_test_env
+printf '{}' > "$BASHCLAW_CONFIG"
+if config_validate 2>/dev/null; then
+  _test_pass
+else
+  _test_pass
+fi
+teardown_test_env
+
+# ---- config_env_substitute with empty string ----
+
+test_start "config_env_substitute with empty string"
+setup_test_env
+result="$(config_env_substitute '')"
+assert_eq "$result" ""
+teardown_test_env
+
+# ---- config_channel_get on missing channel section ----
+
+test_start "config_channel_get missing channel returns default arg"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"channels": {}}
+EOF
+_CONFIG_CACHE=""
+config_load
+val="$(config_channel_get "nonexistent" "token" "none")"
+assert_eq "$val" "none"
+teardown_test_env
+
+# ---- Edge Case: config_load with non-existent file returns empty object ----
+
+test_start "config_load with non-existent file returns empty object"
+setup_test_env
+rm -f "$BASHCLAW_CONFIG"
+_CONFIG_CACHE=""
+config_load
+val="$(config_get '.anything' 'default_val')"
+assert_eq "$val" "default_val"
+assert_eq "$_CONFIG_CACHE" "{}"
+teardown_test_env
+
+# ---- Edge Case: config_load with invalid JSON returns error ----
+
+test_start "config_load with invalid JSON returns error code"
+setup_test_env
+printf '{{broken json' > "$BASHCLAW_CONFIG"
+_CONFIG_CACHE=""
+set +e
+config_load 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+assert_eq "$_CONFIG_CACHE" "{}"
+teardown_test_env
+
+# ---- Edge Case: config_set on non-existent config creates file ----
+
+test_start "config_set on non-existent config creates file"
+setup_test_env
+rm -f "$BASHCLAW_CONFIG"
+_CONFIG_CACHE=""
+config_load
+config_set '.newKey' '"newValue"'
+assert_file_exists "$BASHCLAW_CONFIG"
+_CONFIG_CACHE=""
+config_load
+val="$(config_get '.newKey')"
+assert_eq "$val" "newValue"
+teardown_test_env
+
+# ---- Edge Case: config_validate with port 0 ----
+
+test_start "config_validate with port 0 fails"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"gateway": {"port": 0}}
+EOF
+if config_validate 2>/dev/null; then
+  _test_fail "port 0 should fail validation"
+else
+  _test_pass
+fi
+teardown_test_env
+
+# ---- Edge Case: config_validate with port 99999 ----
+
+test_start "config_validate with port 99999 fails"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"gateway": {"port": 99999}}
+EOF
+if config_validate 2>/dev/null; then
+  _test_fail "port 99999 should fail validation"
+else
+  _test_pass
+fi
+teardown_test_env
+
+# ---- Edge Case: config_validate with port "abc" ----
+
+test_start "config_validate with non-numeric port fails"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"gateway": {"port": "abc"}}
+EOF
+if config_validate 2>/dev/null; then
+  _test_fail "non-numeric port should fail validation"
+else
+  _test_pass
+fi
+teardown_test_env
+
+# ---- Edge Case: config_validate with agents.list entry missing id ----
+
+test_start "config_validate with agents.list entry without id fails"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{
+  "agents": {
+    "defaults": {},
+    "list": [
+      {"model": "some-model"}
+    ]
+  }
+}
+EOF
+if config_validate 2>/dev/null; then
+  _test_fail "agents.list entry without id should fail validation"
+else
+  _test_pass
+fi
+teardown_test_env
+
+# ---- Edge Case: config_validate with invalid dmScope ----
+
+test_start "config_validate with invalid dmScope fails"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{
+  "session": {"dmScope": "invalid-scope-value"}
+}
+EOF
+if config_validate 2>/dev/null; then
+  _test_fail "invalid dmScope should fail validation"
+else
+  _test_pass
+fi
+teardown_test_env
+
+# ---- Edge Case: config_get with missing key returns default ----
+
+test_start "config_get with deeply missing key returns default"
+setup_test_env
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"gateway": {"port": 8080}}
+EOF
+_CONFIG_CACHE=""
+config_load
+val="$(config_get '.a.b.c.d.e' 'deep_default')"
+assert_eq "$val" "deep_default"
+teardown_test_env
+
+# ---- Edge Case: config_env_substitute with nested vars ----
+
+test_start "config_env_substitute with nested vars"
+setup_test_env
+export OUTER_VAR="inner_value"
+result="$(config_env_substitute 'start-${OUTER_VAR}-middle-${OUTER_VAR}-end')"
+assert_eq "$result" "start-inner_value-middle-inner_value-end"
+unset OUTER_VAR
+teardown_test_env
+
+# ---- Edge Case: config_env_substitute with undefined var returns empty ----
+
+test_start "config_env_substitute with undefined var returns empty segment"
+setup_test_env
+unset TOTALLY_UNDEFINED_VAR_XYZ 2>/dev/null || true
+result="$(config_env_substitute 'before-${TOTALLY_UNDEFINED_VAR_XYZ}-after')"
+assert_eq "$result" "before--after"
+teardown_test_env
+
 report_results

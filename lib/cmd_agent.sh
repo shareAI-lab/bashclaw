@@ -51,18 +51,38 @@ cmd_agent_interactive() {
   local sess_file
   sess_file="$(session_file "$agent_id" "$channel" "$sender")"
 
+  local _use_readline=false
+  local _history_file="${BASHCLAW_STATE_DIR}/history"
+  if (echo "" | read -e 2>/dev/null); then
+    _use_readline=true
+    if [[ -f "$_history_file" ]]; then
+      history -r "$_history_file" 2>/dev/null || true
+    fi
+  fi
+
   while true; do
-    printf 'You: '
     local input
-    if ! IFS= read -r input; then
-      printf '\n'
-      break
+    if [[ "$_use_readline" == "true" ]]; then
+      if ! IFS= read -e -r -p 'You: ' input; then
+        printf '\n'
+        break
+      fi
+    else
+      printf 'You: '
+      if ! IFS= read -r input; then
+        printf '\n'
+        break
+      fi
     fi
 
-    # Trim input
     input="$(trim "$input")"
     if [[ -z "$input" ]]; then
       continue
+    fi
+
+    if [[ "$_use_readline" == "true" ]]; then
+      history -s "$input" 2>/dev/null || true
+      history -a "$_history_file" 2>/dev/null || true
     fi
 
     # Handle slash commands

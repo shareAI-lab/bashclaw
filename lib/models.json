@@ -13,7 +13,13 @@
           "input": ["text", "image"],
           "cost": { "input": 15, "output": 75, "cache_read": 1.5, "cache_write": 18.75 },
           "context_window": 200000,
-          "max_tokens": 16384
+          "max_tokens": 32000,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "claude-sonnet-4-20250514",
@@ -22,7 +28,13 @@
           "input": ["text", "image"],
           "cost": { "input": 3, "output": 15, "cache_read": 0.3, "cache_write": 3.75 },
           "context_window": 200000,
-          "max_tokens": 16384
+          "max_tokens": 16384,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "claude-haiku-3-20250307",
@@ -31,7 +43,13 @@
           "input": ["text", "image"],
           "cost": { "input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.3 },
           "context_window": 200000,
-          "max_tokens": 4096
+          "max_tokens": 4096,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -47,7 +65,13 @@
           "input": ["text", "image"],
           "cost": { "input": 2.5, "output": 10, "cache_read": 1.25, "cache_write": 2.5 },
           "context_window": 128000,
-          "max_tokens": 16384
+          "max_tokens": 16384,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         },
         {
           "id": "gpt-4o-mini",
@@ -56,7 +80,13 @@
           "input": ["text", "image"],
           "cost": { "input": 0.15, "output": 0.6, "cache_read": 0.075, "cache_write": 0.15 },
           "context_window": 128000,
-          "max_tokens": 16384
+          "max_tokens": 16384,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         },
         {
           "id": "o1",
@@ -66,7 +96,13 @@
           "cost": { "input": 15, "output": 60, "cache_read": 7.5, "cache_write": 15 },
           "context_window": 200000,
           "max_tokens": 100000,
-          "compat": { "max_tokens_field": "max_completion_tokens" }
+          "compat": { "max_tokens_field": "max_completion_tokens" },
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "o3-mini",
@@ -76,7 +112,13 @@
           "cost": { "input": 1.1, "output": 4.4, "cache_read": 0.55, "cache_write": 1.1 },
           "context_window": 200000,
           "max_tokens": 100000,
-          "compat": { "max_tokens_field": "max_completion_tokens" }
+          "compat": { "max_tokens_field": "max_completion_tokens" },
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         }
       ]
     },
@@ -92,7 +134,13 @@
           "input": ["text", "image"],
           "cost": { "input": 0.1, "output": 0.4, "cache_read": 0.025, "cache_write": 0.1 },
           "context_window": 1048576,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "gemini-2.0-flash-lite",
@@ -101,7 +149,13 @@
           "input": ["text", "image"],
           "cost": { "input": 0.075, "output": 0.3, "cache_read": 0.02, "cache_write": 0.075 },
           "context_window": 1048576,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         },
         {
           "id": "gemini-1.5-pro",
@@ -110,7 +164,13 @@
           "input": ["text", "image"],
           "cost": { "input": 1.25, "output": 5, "cache_read": 0.3, "cache_write": 1.25 },
           "context_window": 2097152,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -126,7 +186,13 @@
           "input": ["text"],
           "cost": { "input": 0.27, "output": 1.1, "cache_read": 0.07, "cache_write": 0.27 },
           "context_window": 128000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         },
         {
           "id": "deepseek-reasoner",
@@ -135,7 +201,13 @@
           "input": ["text"],
           "cost": { "input": 0.55, "output": 2.19, "cache_read": 0.14, "cache_write": 0.55 },
           "context_window": 128000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": false,
+            "extended_thinking": true
+          }
         }
       ]
     },
@@ -151,7 +223,13 @@
           "input": ["text"],
           "cost": { "input": 2.4, "output": 9.6, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         },
         {
           "id": "qwen-plus",
@@ -160,7 +238,13 @@
           "input": ["text"],
           "cost": { "input": 0.8, "output": 2, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         },
         {
           "id": "qwq-plus",
@@ -170,7 +254,13 @@
           "cost": { "input": 0.8, "output": 2, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
           "max_tokens": 8192,
-          "compat": { "thinking_format": "qwen" }
+          "compat": { "thinking_format": "qwen" },
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         }
       ]
     },
@@ -187,7 +277,13 @@
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
           "max_tokens": 4096,
-          "compat": { "thinking_format": "zai" }
+          "compat": { "thinking_format": "zai" },
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "glm-4-flash",
@@ -196,7 +292,13 @@
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
-          "max_tokens": 4096
+          "max_tokens": 4096,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -212,7 +314,13 @@
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 256000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -228,7 +336,13 @@
           "input": ["text"],
           "cost": { "input": 15, "output": 60, "cache_read": 2, "cache_write": 10 },
           "context_window": 200000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "MiniMax-M2.1",
@@ -237,7 +351,13 @@
           "input": ["text"],
           "cost": { "input": 15, "output": 60, "cache_read": 2, "cache_write": 10 },
           "context_window": 200000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -253,7 +373,13 @@
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 262144,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -269,7 +395,13 @@
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 98304,
-          "max_tokens": 32768
+          "max_tokens": 32768,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         },
         {
           "id": "ernie-5.0-thinking-preview",
@@ -278,7 +410,13 @@
           "input": ["text", "image"],
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 119000,
-          "max_tokens": 64000
+          "max_tokens": 64000,
+          "capabilities": {
+            "vision": true,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         }
       ]
     },
@@ -294,7 +432,13 @@
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "context_window": 131072,
-          "max_tokens": 4096
+          "max_tokens": 4096,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -310,7 +454,13 @@
           "input": ["text"],
           "cost": { "input": 0.59, "output": 0.79, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
-          "max_tokens": 32768
+          "max_tokens": 32768,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },
@@ -326,7 +476,13 @@
           "input": ["text"],
           "cost": { "input": 3, "output": 15, "cache_read": 0, "cache_write": 0 },
           "context_window": 131072,
-          "max_tokens": 16384
+          "max_tokens": 16384,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": true
+          }
         }
       ]
     },
@@ -342,7 +498,13 @@
           "input": ["text"],
           "cost": { "input": 2, "output": 6, "cache_read": 0, "cache_write": 0 },
           "context_window": 128000,
-          "max_tokens": 8192
+          "max_tokens": 8192,
+          "capabilities": {
+            "vision": false,
+            "streaming": true,
+            "tools": true,
+            "extended_thinking": false
+          }
         }
       ]
     },

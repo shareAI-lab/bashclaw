@@ -97,7 +97,7 @@ _cmd_hooks_add() {
   ensure_dir "$hooks_dir"
 
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local ts
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
@@ -133,7 +133,7 @@ _cmd_hooks_remove() {
   local hooks_dir
   hooks_dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${hooks_dir}/${safe_name}.json"
 
   if [[ -f "$file" ]]; then
@@ -159,7 +159,7 @@ _cmd_hooks_toggle() {
   local hooks_dir
   hooks_dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${hooks_dir}/${safe_name}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -204,7 +204,7 @@ _cmd_hooks_test() {
   local hooks_dir
   hooks_dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${hooks_dir}/${safe_name}.json"
 
   if [[ ! -f "$file" ]]; then

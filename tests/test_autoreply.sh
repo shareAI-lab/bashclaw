@@ -105,4 +105,124 @@ else
 fi
 teardown_test_env
 
+# ---- Regex metacharacters in pattern are safe (fixed-string matching) ----
+
+test_start "autoreply_check handles regex metacharacters safely"
+setup_test_env
+_source_libs
+autoreply_add ".*+?{}()|[]^$" "Metachar response" >/dev/null
+# The pattern itself should not match arbitrary text via regex
+set +e
+result="$(autoreply_check "anything" 2>/dev/null)"
+rc=$?
+set -e
+if (( rc != 0 )) || [[ -z "$result" ]]; then
+  _test_pass
+else
+  _test_fail "regex metacharacters should not match arbitrary text (got: $result)"
+fi
+teardown_test_env
+
+# ---- Autoreply with empty message returns no match ----
+
+test_start "autoreply_check with empty-string message"
+setup_test_env
+_source_libs
+autoreply_add "hello" "Hello!" >/dev/null
+set +e
+result="$(autoreply_check "" 2>/dev/null)"
+rc=$?
+set -e
+if (( rc != 0 )) || [[ -z "$result" ]]; then
+  _test_pass
+else
+  _test_fail "empty message should not match (got: $result)"
+fi
+teardown_test_env
+
+# ---- Autoreply remove nonexistent ID fails ----
+
+test_start "autoreply_remove nonexistent ID returns failure"
+setup_test_env
+_source_libs
+set +e
+autoreply_remove "nonexistent-id-xyz" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- Autoreply list with no rules returns empty array ----
+
+test_start "autoreply_list with no rules returns empty array"
+setup_test_env
+_source_libs
+result="$(autoreply_list)"
+assert_eq "$result" "[]"
+teardown_test_env
+
+# ---- Autoreply priority ordering ----
+
+test_start "autoreply_check respects priority ordering"
+setup_test_env
+_source_libs
+autoreply_add "test" "Low priority" --priority 200 >/dev/null
+autoreply_add "test" "High priority" --priority 10 >/dev/null
+result="$(autoreply_check "this is a test")"
+assert_eq "$result" "High priority"
+teardown_test_env
+
+# ---- Edge Case: autoreply with regex metacharacters in pattern ----
+
+test_start "autoreply with regex metacharacters does not match arbitrary text"
+setup_test_env
+_source_libs
+autoreply_add '.*+?{}()|[]^$' "Metachar response" >/dev/null
+set +e
+result="$(autoreply_check "random unrelated text" 2>/dev/null)"
+rc=$?
+set -e
+if (( rc != 0 )) || [[ -z "$result" ]]; then
+  _test_pass
+else
+  _test_fail "regex metacharacters should not match arbitrary text (got: $result)"
+fi
+teardown_test_env
+
+test_start "autoreply with regex metachar pattern matches literal occurrence"
+setup_test_env
+_source_libs
+autoreply_add '.*+?' "Metachar literal match" >/dev/null
+result="$(autoreply_check "text containing .*+? literally")"
+assert_eq "$result" "Metachar literal match"
+teardown_test_env
+
+# ---- Edge Case: autoreply with empty message ----
+
+test_start "autoreply_check with empty message returns no match"
+setup_test_env
+_source_libs
+autoreply_add "hello" "Hello there!" >/dev/null
+set +e
+result="$(autoreply_check "" 2>/dev/null)"
+rc=$?
+set -e
+if (( rc != 0 )) || [[ -z "$result" ]]; then
+  _test_pass
+else
+  _test_fail "empty message should not match any rule (got: $result)"
+fi
+teardown_test_env
+
+# ---- Edge Case: autoreply with very long message ----
+
+test_start "autoreply_check with very long message does not crash"
+setup_test_env
+_source_libs
+autoreply_add "needle" "Found it!" >/dev/null
+long_msg="$(printf 'x%.0s' $(seq 1 10001))needle"
+result="$(autoreply_check "$long_msg")"
+assert_eq "$result" "Found it!"
+teardown_test_env
+
 report_results

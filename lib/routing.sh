@@ -173,7 +173,7 @@ routing_check_allowlist() {
       pairing)
         local pair_dir="${BASHCLAW_STATE_DIR:?}/pairing/verified"
         local safe_key
-        safe_key="$(printf '%s_%s' "$channel" "$sender" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+        safe_key="$(sanitize_key "${channel}_${sender}")"
         if [[ -f "${pair_dir}/${safe_key}" ]]; then
           return 0
         fi
@@ -399,7 +399,7 @@ routing_debounce() {
   ensure_dir "$debounce_dir"
 
   local safe_key
-  safe_key="$(printf '%s_%s' "$channel" "$sender" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "${channel}_${sender}")"
   local buffer_file="${debounce_dir}/${safe_key}.buf"
   local timer_file="${debounce_dir}/${safe_key}.timer"
 

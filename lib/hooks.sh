@@ -18,6 +18,14 @@
 #   message_sending    - before a reply is dispatched
 #   message_sent       - after a reply is dispatched
 #   session_start      - when a new session is created
+#   session_end        - when session resets or idle timeout (OpenClaw compat)
+#   gateway_start      - when gateway starts (OpenClaw compat)
+#   gateway_stop       - when gateway stops (OpenClaw compat)
+#   tool_result_persist - after tool result is saved to session (OpenClaw compat)
+#
+# Aliases (OpenClaw-style -> BashClaw-style):
+#   before_tool_call   -> pre_tool
+#   after_tool_call    -> post_tool
 
 # Execution strategies:
 #   void      - parallel fire-and-forget, return value ignored
@@ -35,12 +43,24 @@ _hooks_dir() {
   printf '%s' "$_HOOKS_DIR"
 }
 
-# Validate that an event name is one of the 14 supported events.
+# Resolve event name aliases (OpenClaw-style -> BashClaw-style).
+# Returns the canonical event name.
+_hooks_resolve_alias() {
+  case "$1" in
+    before_tool_call) echo "pre_tool" ;;
+    after_tool_call)  echo "post_tool" ;;
+    *)                echo "$1" ;;
+  esac
+}
+
+# Validate that an event name is one of the supported events.
 _hooks_valid_event() {
   case "$1" in
     pre_message|post_message|pre_tool|post_tool|on_error|on_session_reset|\
     before_agent_start|agent_end|before_compaction|after_compaction|\
-    message_received|message_sending|message_sent|session_start)
+    message_received|message_sending|message_sent|session_start|\
+    session_end|gateway_start|gateway_stop|tool_result_persist|\
+    before_tool_call|after_tool_call)
       return 0 ;;
     *)
       return 1 ;;
@@ -50,10 +70,11 @@ _hooks_valid_event() {
 # Default strategy for each event type
 _hooks_default_strategy() {
   case "$1" in
-    pre_message|pre_tool|message_sending|before_compaction)
+    pre_message|pre_tool|message_sending|before_compaction|before_tool_call)
       echo "modifying" ;;
     post_message|post_tool|on_error|on_session_reset|\
-    agent_end|after_compaction|message_received|message_sent|session_start)
+    agent_end|after_compaction|message_received|message_sent|session_start|\
+    session_end|gateway_start|gateway_stop|tool_result_persist|after_tool_call)
       echo "void" ;;
     before_agent_start)
       echo "sync" ;;
@@ -71,6 +92,9 @@ hooks_register() {
   shift 3
 
   require_command jq "hooks_register requires jq"
+
+  # Resolve event aliases
+  event="$(_hooks_resolve_alias "$event")"
 
   local priority=100
   local strategy=""
@@ -122,7 +146,7 @@ hooks_register() {
   local dir
   dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${dir}/${safe_name}.json"
   local now
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -144,10 +168,18 @@ hooks_register() {
 
 # Collect all enabled hooks for an event, sorted by priority (ascending).
 # Returns a newline-separated list of hook JSON file paths.
+# Also collects hooks registered under aliased event names.
 _hooks_collect_sorted() {
   local event="$1"
   local dir
   dir="$(_hooks_dir)"
+
+  # Determine alias counterpart for matching
+  local alias_event=""
+  case "$event" in
+    pre_tool) alias_event="before_tool_call" ;;
+    post_tool) alias_event="after_tool_call" ;;
+  esac
 
   # Build a list of (priority, filepath) pairs, then sort by priority
   local pairs=""
@@ -161,7 +193,11 @@ _hooks_collect_sorted() {
     hook_pri="$(jq -r '.priority // 100' < "$f" 2>/dev/null)"
 
     if [[ "$hook_event" != "$event" ]]; then
-      continue
+      if [[ -n "$alias_event" && "$hook_event" == "$alias_event" ]]; then
+        : # match via alias
+      else
+        continue
+      fi
     fi
     if [[ "$hook_enabled" != "true" ]]; then
       continue
@@ -194,10 +230,14 @@ hooks_run() {
   local event="${1:?event required}"
   local input_json="${2:-{\}}"
 
+  # Resolve event aliases
+  event="$(_hooks_resolve_alias "$event")"
+
   local dir
   dir="$(_hooks_dir)"
-  local strategy
-  strategy="$(_hooks_default_strategy "$event")"
+  local event_strategy
+  event_strategy="$(_hooks_default_strategy "$event")"
+  local strategy="$event_strategy"
   local current="$input_json"
 
   # Collect sorted hooks into a temp file (bash 3.2 safe)
@@ -210,12 +250,15 @@ hooks_run() {
     [[ -n "$hook_file" ]] || continue
     [[ -f "$hook_file" ]] || continue
 
+    # Reset strategy to event default at top of each hook iteration
+    strategy="$event_strategy"
+
     local hook_script hook_name hook_strategy
     hook_script="$(jq -r '.script // empty' < "$hook_file" 2>/dev/null)"
     hook_name="$(jq -r '.name // "unknown"' < "$hook_file" 2>/dev/null)"
     hook_strategy="$(jq -r '.strategy // empty' < "$hook_file" 2>/dev/null)"
 
-    # Per-hook strategy overrides the event default
+    # Per-hook strategy overrides the event default for this iteration
     if [[ -n "$hook_strategy" ]]; then
       strategy="$hook_strategy"
     fi
@@ -256,60 +299,7 @@ hooks_run() {
   rm -f "$sorted_file"
 
   # For modifying strategy, return the final transformed result
-  if [[ "$strategy" == "modifying" ]]; then
-    printf '%s' "$current"
-  fi
-}
-
-# Run hooks with explicit strategy override.
-# Usage: hooks_run_strategy EVENT STRATEGY [INPUT_JSON]
-hooks_run_strategy() {
-  local event="${1:?event required}"
-  local strategy="${2:?strategy required}"
-  local input_json="${3:-{\}}"
-
-  local dir
-  dir="$(_hooks_dir)"
-  local current="$input_json"
-
-  local sorted_file
-  sorted_file="$(tmpfile "hooks_strat")"
-  _hooks_collect_sorted "$event" > "$sorted_file"
-
-  local hook_file
-  while IFS= read -r hook_file; do
-    [[ -n "$hook_file" ]] || continue
-    [[ -f "$hook_file" ]] || continue
-
-    local hook_script hook_name
-    hook_script="$(jq -r '.script // empty' < "$hook_file" 2>/dev/null)"
-    hook_name="$(jq -r '.name // "unknown"' < "$hook_file" 2>/dev/null)"
-
-    if [[ ! -x "$hook_script" && ! -f "$hook_script" ]]; then
-      log_warn "Hook script missing: $hook_script"
-      continue
-    fi
-
-    case "$strategy" in
-      void)
-        printf '%s' "$current" | bash "$hook_script" >/dev/null 2>/dev/null &
-        ;;
-      modifying)
-        local result
-        result="$(printf '%s' "$current" | bash "$hook_script" 2>/dev/null)" || continue
-        if [[ -n "$result" ]]; then
-          current="$result"
-        fi
-        ;;
-      sync)
-        printf '%s' "$current" | bash "$hook_script" 2>/dev/null || continue
-        ;;
-    esac
-  done < "$sorted_file"
-
-  rm -f "$sorted_file"
-
-  if [[ "$strategy" == "modifying" ]]; then
+  if [[ "$event_strategy" == "modifying" ]]; then
     printf '%s' "$current"
   fi
 }
@@ -377,15 +367,22 @@ hooks_list() {
 
   local dir
   dir="$(_hooks_dir)"
-  local result="[]"
+  local ndjson=""
   local f
 
   for f in "${dir}"/*.json; do
     [[ -f "$f" ]] || continue
     local entry
     entry="$(cat "$f")"
-    result="$(printf '%s' "$result" | jq --argjson e "$entry" '. + [$e]')"
+    ndjson="${ndjson}${entry}"$'\n'
   done
+
+  local result
+  if [[ -n "$ndjson" ]]; then
+    result="$(printf '%s' "$ndjson" | jq -s '.')"
+  else
+    result="[]"
+  fi
 
   # Sort by priority
   printf '%s' "$result" | jq 'sort_by(.priority)'
@@ -411,7 +408,7 @@ hooks_enable() {
   local dir
   dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${dir}/${safe_name}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -434,7 +431,7 @@ hooks_disable() {
   local dir
   dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${dir}/${safe_name}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -455,7 +452,7 @@ hooks_remove() {
   local dir
   dir="$(_hooks_dir)"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${dir}/${safe_name}.json"
 
   if [[ ! -f "$file" ]]; then

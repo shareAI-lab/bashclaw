@@ -37,7 +37,7 @@ autoreply_add() {
   local id
   id="$(uuid_generate)"
   local safe_id
-  safe_id="$(printf '%s' "$id" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "$id")"
   local file="${dir}/${safe_id}.json"
   local now
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -70,7 +70,7 @@ autoreply_check() {
   dir="$(_autoreply_dir)"
 
   # Load all enabled rules and sort by priority (lower = higher priority)
-  local rules="[]"
+  local ndjson=""
   local f
   for f in "${dir}"/*.json; do
     [[ -f "$f" ]] || continue
@@ -79,12 +79,17 @@ autoreply_check() {
     local enabled
     enabled="$(printf '%s' "$entry" | jq -r '.enabled // false')"
     if [[ "$enabled" == "true" ]]; then
-      rules="$(printf '%s' "$rules" | jq --argjson e "$entry" '. + [$e]')"
+      ndjson="${ndjson}${entry}"$'\n'
     fi
   done
 
   # Sort by priority ascending
-  rules="$(printf '%s' "$rules" | jq 'sort_by(.priority)')"
+  local rules
+  if [[ -n "$ndjson" ]]; then
+    rules="$(printf '%s' "$ndjson" | jq -s 'sort_by(.priority)')"
+  else
+    rules="[]"
+  fi
 
   local count
   count="$(printf '%s' "$rules" | jq 'length')"
@@ -102,8 +107,22 @@ autoreply_check() {
       continue
     fi
 
-    # Check pattern match (regex)
-    if printf '%s' "$message" | grep -qiE "$rule_pattern" 2>/dev/null; then
+    # Check pattern match: split pipe-separated alternatives and use
+    # fixed-string matching for each to prevent regex injection.
+    local _matched=false
+    local _saved_ifs="$IFS"
+    IFS='|'
+    local _alt
+    for _alt in $rule_pattern; do
+      IFS="$_saved_ifs"
+      if [[ -n "$_alt" ]] && printf '%s' "$message" | grep -qiF "$_alt" 2>/dev/null; then
+        _matched=true
+        break
+      fi
+    done
+    IFS="$_saved_ifs"
+
+    if [[ "$_matched" == "true" ]]; then
       printf '%s' "$rule_response"
       return 0
     fi
@@ -144,15 +163,21 @@ autoreply_list() {
 
   local dir
   dir="$(_autoreply_dir)"
-  local result="[]"
+  local ndjson=""
   local f
 
   for f in "${dir}"/*.json; do
     [[ -f "$f" ]] || continue
     local entry
     entry="$(cat "$f")"
-    result="$(printf '%s' "$result" | jq --argjson e "$entry" '. + [$e]')"
+    ndjson="${ndjson}${entry}"$'\n'
   done
 
+  local result
+  if [[ -n "$ndjson" ]]; then
+    result="$(printf '%s' "$ndjson" | jq -s '.')"
+  else
+    result="[]"
+  fi
   printf '%s' "$result" | jq 'sort_by(.priority)'
 }

@@ -246,6 +246,8 @@ cron_run_job() {
 
   local result=""
   local exit_status=0
+  local run_start_ms
+  run_start_ms="$(timestamp_ms)"
 
   case "$session_target" in
     isolated)
@@ -256,14 +258,20 @@ cron_run_job() {
       ;;
   esac
 
+  local run_end_ms
+  run_end_ms="$(timestamp_ms)"
+  local run_duration_ms=$((run_end_ms - run_start_ms))
+
   # Clean up run lock
   rm -f "${run_lock_dir}/${job_id}_${run_id}.run"
 
   # Update job status
   if (( exit_status == 0 )); then
     _cron_update_job_status "$job_id" "success" "${result:0:500}" 0
+    cron_log_run "$job_id" "success" "" "$run_duration_ms" "${result:0:500}"
   else
     _cron_update_job_status "$job_id" "error" "${result:0:500}" 1
+    cron_log_run "$job_id" "error" "${result:0:500}" "$run_duration_ms" ""
   fi
 
   # Log to history
@@ -550,6 +558,97 @@ cron_session_reap() {
   done < <(find "$sessions_dir" -name 'cron:*' -print0 2>/dev/null)
 }
 
+# -- Run History (JSONL-based) --
+
+# Log a cron job run to JSONL history.
+# Rotates the log file if it exceeds 5MB.
+cron_log_run() {
+  local job_id="${1:?job_id required}"
+  local status="${2:?status required}"
+  local error_msg="${3:-}"
+  local duration_ms="${4:-0}"
+  local summary="${5:-}"
+
+  require_command jq "cron_log_run requires jq"
+
+  local runs_dir
+  runs_dir="$(_cron_dir)/runs"
+  ensure_dir "$runs_dir"
+
+  local log_file="${runs_dir}/${job_id}.jsonl"
+
+  # Rotate if file exceeds 5MB
+  if [[ -f "$log_file" ]]; then
+    local file_size
+    file_size="$(file_size_bytes "$log_file")"
+    if (( file_size > 5242880 )); then
+      local rotated="${log_file}.old"
+      mv "$log_file" "$rotated"
+      # Keep only the last 1000 lines from the rotated file
+      tail -n 1000 "$rotated" > "$log_file"
+      rm -f "$rotated"
+      log_debug "cron_log_run: rotated log for job $job_id"
+    fi
+  fi
+
+  local ts
+  ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  local entry
+  entry="$(jq -nc \
+    --arg ts "$ts" \
+    --arg jid "$job_id" \
+    --arg st "$status" \
+    --arg err "$error_msg" \
+    --argjson dur "$duration_ms" \
+    --arg sum "$summary" \
+    '{ts: $ts, job_id: $jid, status: $st, error: $err, duration_ms: $dur, summary: $sum}')"
+
+  printf '%s\n' "$entry" >> "$log_file"
+}
+
+# Get the last N run history entries for a job.
+# Returns a JSON array.
+cron_get_run_history() {
+  local job_id="${1:?job_id required}"
+  local limit="${2:-20}"
+
+  require_command jq "cron_get_run_history requires jq"
+
+  local log_file
+  log_file="$(_cron_dir)/runs/${job_id}.jsonl"
+
+  if [[ ! -f "$log_file" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  tail -n "$limit" "$log_file" | jq -s '.'
+}
+
+# Get aggregate run statistics for a job.
+# Returns a JSON object with total, success, error counts and avg duration.
+cron_get_run_stats() {
+  local job_id="${1:?job_id required}"
+
+  require_command jq "cron_get_run_stats requires jq"
+
+  local log_file
+  log_file="$(_cron_dir)/runs/${job_id}.jsonl"
+
+  if [[ ! -f "$log_file" ]]; then
+    printf '{"total":0,"success":0,"errors":0,"avg_duration_ms":0}'
+    return 0
+  fi
+
+  jq -s '{
+    total: length,
+    success: [.[] | select(.status == "success")] | length,
+    errors: [.[] | select(.status == "error")] | length,
+    avg_duration_ms: (if length > 0 then ([.[].duration_ms] | add / length | floor) else 0 end)
+  }' < "$log_file"
+}
+
 # -- Internal helpers --
 
 # Update a job's status after a run
@@ -634,93 +733,124 @@ _cron_iso_to_epoch() {
     return 0
   }
 
-  # Python fallback
-  if is_command_available python3; then
-    epoch="$(python3 -c "
-import datetime,sys
-try:
-    dt = datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
-    print(int(dt.timestamp()))
-except:
-    print(0)
-" "$iso_str" 2>/dev/null)"
-    printf '%s' "${epoch:-0}"
-    return 0
-  fi
-
   printf '0'
   return 1
 }
 
+# Parse a single cron field into a list of matching values.
+# Usage: _cron_parse_field FIELD LO HI
+# Output: space-separated list of matching integers
+_cron_parse_field() {
+  local field="$1"
+  local lo="$2"
+  local hi="$3"
+  local result=""
+
+  # Split on commas
+  local IFS=','
+  local part
+  for part in $field; do
+    if [[ "$part" == "*" ]]; then
+      local v
+      for (( v=lo; v<=hi; v++ )); do
+        result="$result $v"
+      done
+    elif [[ "$part" == *"/"* ]]; then
+      local base="${part%%/*}"
+      local step="${part#*/}"
+      local start="$lo"
+      if [[ "$base" != "*" ]]; then
+        start="$base"
+      fi
+      local v
+      for (( v=start; v<=hi; v+=step )); do
+        result="$result $v"
+      done
+    elif [[ "$part" == *"-"* ]]; then
+      local range_lo="${part%%-*}"
+      local range_hi="${part#*-}"
+      local v
+      for (( v=range_lo; v<=range_hi; v++ )); do
+        result="$result $v"
+      done
+    else
+      result="$result $part"
+    fi
+  done
+
+  printf '%s' "$result"
+}
+
+# Check if a value is in a space-separated list
+_cron_in_list() {
+  local needle="$1"
+  local haystack="$2"
+  local v
+  for v in $haystack; do
+    if [[ "$v" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Calculate next matching time for a 5-field cron expression.
-# This is a simplified implementation that checks minute granularity.
+# Pure bash implementation, minute granularity.
 _cron_next_match() {
   local expr="$1"
   local tz="${2:-}"
 
-  # For simplicity, use python3 if available for accurate cron matching
-  if is_command_available python3; then
-    local result
-    result="$(python3 -c "
-import time, sys
+  local f1 f2 f3 f4 f5 _rest
+  read -r f1 f2 f3 f4 f5 _rest <<< "$expr"
 
-def parse_field(field, lo, hi):
-    if field == '*':
-        return list(range(lo, hi + 1))
-    values = set()
-    for part in field.split(','):
-        if '/' in part:
-            base, step = part.split('/', 1)
-            step = int(step)
-            if base == '*':
-                start = lo
-            else:
-                start = int(base)
-            for v in range(start, hi + 1, step):
-                values.add(v)
-        elif '-' in part:
-            a, b = part.split('-', 1)
-            for v in range(int(a), int(b) + 1):
-                values.add(v)
-        else:
-            values.add(int(part))
-    return sorted(values)
-
-try:
-    fields = sys.argv[1].split()
-    if len(fields) < 5:
-        print(0)
-        sys.exit(0)
-
-    minutes = parse_field(fields[0], 0, 59)
-    hours = parse_field(fields[1], 0, 23)
-    mdays = parse_field(fields[2], 1, 31)
-    months = parse_field(fields[3], 1, 12)
-    wdays = parse_field(fields[4], 0, 6)
-
-    now = time.time()
-    t = int(now) + 60 - (int(now) % 60)
-
-    for _ in range(525600):
-        lt = time.localtime(t)
-        if (lt.tm_min in minutes and lt.tm_hour in hours and
-            lt.tm_mday in mdays and lt.tm_mon in months and
-            ((lt.tm_wday + 1) % 7) in wdays):
-            print(t)
-            sys.exit(0)
-        t += 60
-    print(0)
-except:
-    print(0)
-" "$expr" 2>/dev/null)"
-    printf '%s' "${result:-0}"
-    return 0
+  if [[ -z "$f1" || -z "$f2" || -z "$f3" || -z "$f4" || -z "$f5" ]]; then
+    printf '0'
+    return 1
   fi
 
-  # Fallback: return current time + 60s (next minute)
+  local minutes hours mdays months wdays
+  minutes="$(_cron_parse_field "$f1" 0 59)"
+  hours="$(_cron_parse_field "$f2" 0 23)"
+  mdays="$(_cron_parse_field "$f3" 1 31)"
+  months="$(_cron_parse_field "$f4" 1 12)"
+  wdays="$(_cron_parse_field "$f5" 0 6)"
+
   local now_s
-  now_s="$(timestamp_s)"
-  printf '%s' "$((now_s + 60))"
+  now_s="$(date +%s)"
+  # Start from the next minute boundary
+  local t=$(( now_s + 60 - (now_s % 60) ))
+
+  # Search up to 1 year ahead (525600 minutes)
+  local i
+  for (( i=0; i<525600; i++ )); do
+    local check_min check_hour check_mday check_mon check_wday
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      check_min="$(date -r "$t" '+%-M' 2>/dev/null)"
+      check_hour="$(date -r "$t" '+%-H' 2>/dev/null)"
+      check_mday="$(date -r "$t" '+%-d' 2>/dev/null)"
+      check_mon="$(date -r "$t" '+%-m' 2>/dev/null)"
+      check_wday="$(date -r "$t" '+%w' 2>/dev/null)"
+    else
+      check_min="$(date -d "@$t" '+%-M' 2>/dev/null)"
+      check_hour="$(date -d "@$t" '+%-H' 2>/dev/null)"
+      check_mday="$(date -d "@$t" '+%-d' 2>/dev/null)"
+      check_mon="$(date -d "@$t" '+%-m' 2>/dev/null)"
+      check_wday="$(date -d "@$t" '+%w' 2>/dev/null)"
+    fi
+
+    if _cron_in_list "$check_min" "$minutes" && \
+       _cron_in_list "$check_hour" "$hours" && \
+       _cron_in_list "$check_mday" "$mdays" && \
+       _cron_in_list "$check_mon" "$months" && \
+       _cron_in_list "$check_wday" "$wdays"; then
+      printf '%s' "$t"
+      return 0
+    fi
+
+    t=$((t + 60))
+  done
+
+  printf '0'
 }
 
 # Migrate legacy individual JSON job files into the consolidated store
@@ -728,7 +858,7 @@ _cron_migrate_legacy() {
   local dir="$1"
   local store="$2"
 
-  local jobs="[]"
+  local jobs_ndjson=""
   local found=0
   local f
   for f in "${dir}"/*.json; do
@@ -758,12 +888,14 @@ _cron_migrate_legacy() {
           backoffUntil: null
         } + (if .agent_id then {agent_id: .agent_id} else {} end)
       ')"
-      jobs="$(printf '%s' "$jobs" | jq --argjson e "$entry" '. + [$e]')"
+      jobs_ndjson="${jobs_ndjson}${entry}"$'\n'
       found=$((found + 1))
     fi
   done
 
   if (( found > 0 )); then
+    local jobs
+    jobs="$(printf '%s' "$jobs_ndjson" | jq -s '.')"
     local result
     result="$(jq -nc --argjson j "$jobs" '{version: 1, jobs: $j}')"
     printf '%s\n' "$result" > "$store"

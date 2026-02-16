@@ -46,12 +46,25 @@ is_command_available() {
   command -v "$1" &>/dev/null
 }
 
+# Cache for require_command results to avoid repeated lookups.
+# Uses a simple string-based cache compatible with bash 3.2+.
+_REQUIRE_CMD_VERIFIED=""
+
 require_command() {
   local cmd="$1"
   local msg="${2:-Required command not found: $cmd}"
+
+  # Check the cache first (space-delimited list of verified commands)
+  case " $_REQUIRE_CMD_VERIFIED " in
+    *" $cmd "*) return 0 ;;
+  esac
+
   if ! is_command_available "$cmd"; then
     log_fatal "$msg"
   fi
+
+  # Cache the successful check
+  _REQUIRE_CMD_VERIFIED="${_REQUIRE_CMD_VERIFIED} ${cmd}"
 }
 
 url_encode() {
@@ -213,4 +226,10 @@ wait_for_port() {
     elapsed=$((elapsed + 1))
   done
   return 1
+}
+
+sanitize_key() {
+  local key="$1"
+  local max_len="${2:-200}"
+  printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c "$max_len"
 }

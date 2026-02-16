@@ -28,7 +28,7 @@ _plugin_registry_dir() {
 plugin_discover() {
   require_command jq "plugin_discover requires jq"
 
-  local results="[]"
+  local ndjson=""
   local search_dirs=""
   local bashclaw_root="${BASHCLAW_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -69,14 +69,18 @@ plugin_discover() {
 
       local plugin_dir
       plugin_dir="$(dirname "$manifest_file")"
-      results="$(printf '%s' "$results" | jq \
+      ndjson="${ndjson}$(jq -nc \
         --arg dir "$plugin_dir" \
         --slurpfile manifest "$manifest_file" \
-        '. + [($manifest[0] + {_dir: $dir})]')"
+        '$manifest[0] + {_dir: $dir}')"$'\n'
     done
   done
 
-  printf '%s' "$results"
+  if [[ -n "$ndjson" ]]; then
+    printf '%s' "$ndjson" | jq -s '.'
+  else
+    printf '[]'
+  fi
 }
 
 # Load a plugin by sourcing its entry script.
@@ -216,7 +220,7 @@ plugin_list() {
 
   local reg_dir
   reg_dir="$(_plugin_registry_dir)/registry"
-  local result="[]"
+  local ndjson=""
   local f
 
   for f in "${reg_dir}"/*.json; do
@@ -224,11 +228,15 @@ plugin_list() {
     local entry
     entry="$(jq '{id: .id, dir: .dir, loaded_at: .loaded_at, registrations: (.registrations // [])}' < "$f" 2>/dev/null)"
     if [[ -n "$entry" ]]; then
-      result="$(printf '%s' "$result" | jq --argjson e "$entry" '. + [$e]')"
+      ndjson="${ndjson}${entry}"$'\n'
     fi
   done
 
-  printf '%s' "$result"
+  if [[ -n "$ndjson" ]]; then
+    printf '%s' "$ndjson" | jq -s '.'
+  else
+    printf '[]'
+  fi
 }
 
 # Register a tool provided by a plugin.
@@ -246,7 +254,7 @@ plugin_register_tool() {
   tools_dir="$(_plugin_registry_dir)/tools"
 
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
 
   jq -nc \
     --arg name "$name" \
@@ -293,7 +301,7 @@ plugin_register_command() {
   cmds_dir="$(_plugin_registry_dir)/commands"
 
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
 
   jq -nc \
     --arg name "$name" \
@@ -322,7 +330,7 @@ plugin_register_provider() {
   providers_dir="$(_plugin_registry_dir)/providers"
 
   local safe_id
-  safe_id="$(printf '%s' "$id" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "$id")"
 
   jq -nc \
     --arg id "$id" \
@@ -370,7 +378,7 @@ plugin_tool_handler() {
   local tools_dir
   tools_dir="$(_plugin_registry_dir)/tools"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${tools_dir}/${safe_name}.json"
 
   if [[ -f "$file" ]]; then
@@ -386,7 +394,7 @@ plugin_command_handler() {
   local cmds_dir
   cmds_dir="$(_plugin_registry_dir)/commands"
   local safe_name
-  safe_name="$(printf '%s' "$name" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_name="$(sanitize_key "$name")"
   local file="${cmds_dir}/${safe_name}.json"
 
   if [[ -f "$file" ]]; then

@@ -1,7 +1,13 @@
 .env
 *.bak
 *.tmp
+*.log
+*.pid
+*.fifo
 /tmp/
 __pycache__/
 *.pyc
 .DS_Store
+/.bashclaw/
+node_modules/
+.claude/

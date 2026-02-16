@@ -5,19 +5,15 @@
 
 # Timing-safe string comparison using HMAC.
 # Compares two strings in constant time to prevent timing side-channel attacks.
+# Both inputs are hashed with an ephemeral HMAC key so the final comparison
+# operates on fixed-length digests regardless of input lengths.
 # Returns 0 if equal, 1 otherwise.
 _security_safe_equal() {
   local a="$1"
   local b="$2"
 
-  if [[ "${#a}" -ne "${#b}" ]]; then
-    # Lengths differ, but still do a full HMAC comparison
-    # to avoid leaking length info via timing
-    :
-  fi
-
   local hmac_key
-  hmac_key="bashclaw_compare_$$_$(date +%s)"
+  hmac_key="bashclaw_$$_$(date +%s)"
 
   local hash_a hash_b
   if command -v openssl >/dev/null 2>&1; then
@@ -30,17 +26,11 @@ _security_safe_equal() {
     hash_a="$(printf '%s%s' "$hmac_key" "$a" | sha256sum 2>/dev/null | awk '{print $1}')"
     hash_b="$(printf '%s%s' "$hmac_key" "$b" | sha256sum 2>/dev/null | awk '{print $1}')"
   else
-    # No hash tool available, fall back to direct comparison
-    if [[ "$a" == "$b" ]]; then
-      return 0
-    fi
-    return 1
+    [[ "$a" == "$b" ]]
+    return $?
   fi
 
-  if [[ "$hash_a" == "$hash_b" ]]; then
-    return 0
-  fi
-  return 1
+  [[ "$hash_a" == "$hash_b" ]]
 }
 
 # Append an audit event to the audit log (JSONL format)
@@ -92,7 +82,7 @@ security_pairing_code_generate() {
   local expiry=$((now + 300))
 
   local safe_key
-  safe_key="$(printf '%s_%s' "$channel" "$sender" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "${channel}_${sender}")"
   local file="${pair_dir}/${safe_key}.json"
 
   jq -nc \
@@ -121,7 +111,7 @@ security_pairing_code_verify() {
 
   local pair_dir="${BASHCLAW_STATE_DIR:?}/pairing"
   local safe_key
-  safe_key="$(printf '%s_%s' "$channel" "$sender" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "${channel}_${sender}")"
   local file="${pair_dir}/${safe_key}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -174,7 +164,7 @@ security_rate_limit() {
   ensure_dir "$rl_dir"
 
   local safe_sender
-  safe_sender="$(printf '%s' "$sender" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_sender="$(sanitize_key "$sender")"
   local file="${rl_dir}/${safe_sender}.dat"
 
   local now

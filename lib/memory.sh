@@ -12,8 +12,7 @@ memory_dir() {
 
 # Sanitize a key for safe use as a filename
 _memory_key_to_filename() {
-  local key="$1"
-  printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200
+  sanitize_key "$1"
 }
 
 # ---- Workspace Memory (Gap 2.5) ----
@@ -158,7 +157,7 @@ memory_search() {
 
   local dir
   dir="$(memory_dir)"
-  local results="[]"
+  local ndjson=""
 
   # Split query into terms for BM25-style scoring
   local query_lower
@@ -173,8 +172,7 @@ memory_search() {
       entry="$(cat "$f")"
       local score
       score="$(_memory_score_entry "$entry" "$query_lower")"
-      results="$(printf '%s' "$results" | jq --argjson e "$entry" --argjson s "$score" \
-        '. + [$e + {score: $s}]')"
+      ndjson="${ndjson}$(jq -nc --argjson e "$entry" --argjson s "$score" '$e + {score: $s}')"$'\n'
     fi
   done
 
@@ -194,12 +192,12 @@ memory_search() {
         snippet="$(grep -i "$query" "$memory_md" 2>/dev/null | head -5)"
         local md_score
         md_score="$(_memory_score_text "$snippet" "$query_lower")"
-        results="$(printf '%s' "$results" | jq \
+        ndjson="${ndjson}$(jq -nc \
           --arg k "md:${agent_id}:MEMORY" \
           --arg v "$snippet" \
           --arg src "$memory_md" \
           --argjson s "$md_score" \
-          '. + [{key: $k, value: $v, source: $src, score: $s, tags: ["markdown","curated"]}]')"
+          '{key: $k, value: $v, source: $src, score: $s, tags: ["markdown","curated"]}')"$'\n'
       fi
 
       # Search daily log files
@@ -213,18 +211,24 @@ memory_search() {
           daily_score="$(_memory_score_text "$md_snippet" "$query_lower")"
           local md_basename
           md_basename="$(basename "$md_file")"
-          results="$(printf '%s' "$results" | jq \
+          ndjson="${ndjson}$(jq -nc \
             --arg k "md:${agent_id}:${md_basename}" \
             --arg v "$md_snippet" \
             --arg src "$md_file" \
             --argjson s "$daily_score" \
-            '. + [{key: $k, value: $v, source: $src, score: $s, tags: ["markdown","daily"]}]')"
+            '{key: $k, value: $v, source: $src, score: $s, tags: ["markdown","daily"]}')"$'\n'
         fi
       done
     done
   fi
 
   # Sort by score descending and limit results
+  local results
+  if [[ -n "$ndjson" ]]; then
+    results="$(printf '%s' "$ndjson" | jq -s '.')"
+  else
+    results="[]"
+  fi
   printf '%s' "$results" | jq --argjson limit "$max_results" \
     'sort_by(-.score) | .[:$limit]'
 }
@@ -292,15 +296,22 @@ memory_list() {
 
   local dir
   dir="$(memory_dir)"
-  local all="[]"
+  local ndjson=""
   local f
 
   for f in "${dir}"/*.json; do
     [[ -f "$f" ]] || continue
     local entry
     entry="$(cat "$f")"
-    all="$(printf '%s' "$all" | jq --argjson e "$entry" '. + [$e]')"
+    ndjson="${ndjson}${entry}"$'\n'
   done
+
+  local all
+  if [[ -n "$ndjson" ]]; then
+    all="$(printf '%s' "$ndjson" | jq -s '.')"
+  else
+    all="[]"
+  fi
 
   printf '%s' "$all" | jq --argjson off "$offset" --argjson lim "$limit" \
     '.[$off:$off + $lim]'
@@ -330,17 +341,21 @@ memory_export() {
 
   local dir
   dir="$(memory_dir)"
-  local all="[]"
+  local ndjson=""
   local f
 
   for f in "${dir}"/*.json; do
     [[ -f "$f" ]] || continue
     local entry
     entry="$(cat "$f")"
-    all="$(printf '%s' "$all" | jq --argjson e "$entry" '. + [$e]')"
+    ndjson="${ndjson}${entry}"$'\n'
   done
 
-  printf '%s' "$all"
+  if [[ -n "$ndjson" ]]; then
+    printf '%s' "$ndjson" | jq -s '.'
+  else
+    printf '[]'
+  fi
 }
 
 # Import memory entries from a JSON array file
@@ -411,4 +426,351 @@ memory_compact() {
   done
 
   log_info "Memory compact: removed $removed invalid entries"
+}
+
+# ---- Enhanced Text Search (TF-IDF-like scoring) ----
+
+# Search all memory KV files with TF-IDF-like scoring.
+# For each query word: score = (word_count / total_words_in_value)
+# Boost 2x if word appears in key, 1.5x if word appears in tags.
+# Returns top N results as JSON array with {key, value, score, tags, source}.
+memory_search_text() {
+  local query="${1:-}"
+  local limit="${2:-10}"
+
+  require_command jq "memory_search_text requires jq"
+
+  if [[ -z "$query" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  local dir
+  dir="$(memory_dir)"
+  local ndjson=""
+
+  local query_lower
+  query_lower="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
+
+  local f
+  for f in "${dir}"/*.json; do
+    [[ -f "$f" ]] || continue
+    # Skip workspace index files
+    local basename_f
+    basename_f="$(basename "$f")"
+    [[ "$basename_f" == .* ]] && continue
+
+    local entry
+    entry="$(cat "$f")" 2>/dev/null || continue
+    if ! printf '%s' "$entry" | jq empty 2>/dev/null; then
+      continue
+    fi
+
+    local value_text key_text tags_text
+    value_text="$(printf '%s' "$entry" | jq -r '.value // ""' 2>/dev/null)"
+    key_text="$(printf '%s' "$entry" | jq -r '.key // ""' 2>/dev/null)"
+    tags_text="$(printf '%s' "$entry" | jq -r '(.tags // []) | join(" ")' 2>/dev/null)"
+
+    local value_lower key_lower tags_lower
+    value_lower="$(printf '%s' "$value_text" | tr '[:upper:]' '[:lower:]')"
+    key_lower="$(printf '%s' "$key_text" | tr '[:upper:]' '[:lower:]')"
+    tags_lower="$(printf '%s' "$tags_text" | tr '[:upper:]' '[:lower:]')"
+
+    # Count total words in value
+    local total_words=0
+    local w
+    for w in $value_lower; do
+      total_words=$((total_words + 1))
+    done
+    if [[ "$total_words" -eq 0 ]]; then
+      total_words=1
+    fi
+
+    local score=0
+    local term
+    for term in $query_lower; do
+      [[ -z "$term" ]] && continue
+
+      # Count occurrences in value text
+      local count=0
+      local tmp="$value_lower"
+      while [[ "$tmp" == *"$term"* ]]; do
+        count=$((count + 1))
+        tmp="${tmp#*"$term"}"
+      done
+
+      if [[ "$count" -gt 0 ]]; then
+        # TF-IDF-like: word_count / total_words (scaled by 1000 for integer math)
+        local tf_score=$(( (count * 1000) / total_words ))
+        score=$((score + tf_score))
+      fi
+
+      # Boost 2x if query word appears in key
+      if [[ "$key_lower" == *"$term"* ]]; then
+        local key_boost=$(( (count * 1000) / total_words ))
+        score=$((score + key_boost))
+      fi
+
+      # Boost 1.5x if query word appears in tags
+      if [[ "$tags_lower" == *"$term"* ]]; then
+        local tag_boost=$(( ((count * 1000) / total_words) / 2 ))
+        score=$((score + tag_boost))
+      fi
+    done
+
+    if [[ "$score" -gt 0 ]]; then
+      ndjson="${ndjson}$(printf '%s' "$entry" | jq -c --argjson s "$score" '{key: .key, value: .value, score: $s, tags: (.tags // []), source: (.source // "")}')"$'\n'
+    fi
+  done
+
+  if [[ -n "$ndjson" ]]; then
+    printf '%s' "$ndjson" | jq -s --argjson limit "$limit" \
+      'sort_by(-.score) | .[:$limit]'
+  else
+    printf '[]'
+  fi
+}
+
+# Search workspace memory files: MEMORY.md + daily logs.
+# Parse MEMORY.md into sections (split on ## headers), score each section.
+# Search daily log files (most recent first).
+# Returns combined results as JSON array.
+memory_search_workspace() {
+  local query="${1:-}"
+  local agent_id="${2:-main}"
+
+  require_command jq "memory_search_workspace requires jq"
+
+  if [[ -z "$query" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  local query_lower
+  query_lower="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
+
+  local ndjson=""
+  local agent_dir="${BASHCLAW_STATE_DIR:?}/agents/${agent_id}"
+
+  # Search MEMORY.md sections
+  local memory_md="${agent_dir}/MEMORY.md"
+  if [[ -f "$memory_md" ]]; then
+    local current_section=""
+    local current_title=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == "## "* ]]; then
+        # Score previous section if non-empty
+        if [[ -n "$current_section" ]]; then
+          local section_score
+          section_score="$(_memory_search_text_score "$current_section" "$query_lower")"
+          if [[ "$section_score" -gt 0 ]]; then
+            ndjson="${ndjson}$(jq -nc \
+              --arg k "workspace:${agent_id}:${current_title}" \
+              --arg v "$current_section" \
+              --argjson s "$section_score" \
+              --arg src "$memory_md" \
+              '{key: $k, value: $v, score: $s, tags: ["workspace","curated"], source: $src}')"$'\n'
+          fi
+        fi
+        current_title="${line#"## "}"
+        current_section=""
+      else
+        current_section="${current_section}${line}"$'\n'
+      fi
+    done < "$memory_md"
+    # Score final section
+    if [[ -n "$current_section" ]]; then
+      local section_score
+      section_score="$(_memory_search_text_score "$current_section" "$query_lower")"
+      if [[ "$section_score" -gt 0 ]]; then
+        ndjson="${ndjson}$(jq -nc \
+          --arg k "workspace:${agent_id}:${current_title}" \
+          --arg v "$current_section" \
+          --argjson s "$section_score" \
+          --arg src "$memory_md" \
+          '{key: $k, value: $v, score: $s, tags: ["workspace","curated"], source: $src}')"$'\n'
+      fi
+    fi
+  fi
+
+  # Search daily log files (most recent first)
+  local workspace="${agent_dir}/memory"
+  if [[ -d "$workspace" ]]; then
+    local md_file
+    for md_file in $(ls -t "${workspace}"/*.md 2>/dev/null); do
+      [[ -f "$md_file" ]] || continue
+      local content
+      content="$(cat "$md_file" 2>/dev/null)" || continue
+      local daily_score
+      daily_score="$(_memory_search_text_score "$content" "$query_lower")"
+      if [[ "$daily_score" -gt 0 ]]; then
+        local md_basename
+        md_basename="$(basename "$md_file")"
+        # Truncate content for result display
+        local snippet
+        snippet="$(printf '%s' "$content" | head -20)"
+        ndjson="${ndjson}$(jq -nc \
+          --arg k "workspace:${agent_id}:daily:${md_basename}" \
+          --arg v "$snippet" \
+          --argjson s "$daily_score" \
+          --arg src "$md_file" \
+          '{key: $k, value: $v, score: $s, tags: ["workspace","daily"], source: $src}')"$'\n'
+      fi
+    done
+  fi
+
+  if [[ -n "$ndjson" ]]; then
+    printf '%s' "$ndjson" | jq -s 'sort_by(-.score)'
+  else
+    printf '[]'
+  fi
+}
+
+# Score a text block against query terms (used by workspace search).
+# Returns integer score.
+_memory_search_text_score() {
+  local text="$1"
+  local query_lower="$2"
+
+  local text_lower
+  text_lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+
+  local total_words=0
+  local w
+  for w in $text_lower; do
+    total_words=$((total_words + 1))
+  done
+  if [[ "$total_words" -eq 0 ]]; then
+    total_words=1
+  fi
+
+  local score=0
+  local term
+  for term in $query_lower; do
+    [[ -z "$term" ]] && continue
+    local count=0
+    local tmp="$text_lower"
+    while [[ "$tmp" == *"$term"* ]]; do
+      count=$((count + 1))
+      tmp="${tmp#*"$term"}"
+    done
+    if [[ "$count" -gt 0 ]]; then
+      local tf_score=$(( (count * 1000) / total_words ))
+      score=$((score + tf_score))
+    fi
+  done
+
+  printf '%s' "$score"
+}
+
+# Sync workspace directory changes into memory index.
+# Scans MEMORY.md content, tracks file hashes to detect changes.
+# Stores index in ${BASHCLAW_STATE_DIR}/memory/.workspace_index.json
+memory_sync_workspace() {
+  local agent_id="${1:-main}"
+
+  require_command jq "memory_sync_workspace requires jq"
+
+  local agent_dir="${BASHCLAW_STATE_DIR:?}/agents/${agent_id}"
+  local mem_dir
+  mem_dir="$(memory_dir)"
+  local index_file="${mem_dir}/.workspace_index.json"
+
+  local old_index='{}'
+  if [[ -f "$index_file" ]]; then
+    old_index="$(cat "$index_file" 2>/dev/null)" || old_index='{}'
+  fi
+
+  local new_entries='{}'
+  local updated=0
+
+  # Scan MEMORY.md
+  local memory_md="${agent_dir}/MEMORY.md"
+  if [[ -f "$memory_md" ]]; then
+    local file_hash
+    file_hash="$(hash_string "$(cat "$memory_md")")"
+    local old_hash
+    old_hash="$(printf '%s' "$old_index" | jq -r --arg f "$memory_md" '.[$f] // ""' 2>/dev/null)"
+    if [[ "$file_hash" != "$old_hash" ]]; then
+      updated=$((updated + 1))
+      # Parse sections and store as memory entries
+      local current_section="" current_title=""
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "## "* ]]; then
+          if [[ -n "$current_section" && -n "$current_title" ]]; then
+            local safe_title
+            safe_title="$(printf '%s' "$current_title" | tr -c '[:alnum:]._-' '_' | head -c 100)"
+            memory_store "ws_${agent_id}_${safe_title}" "$current_section" \
+              --tags "workspace,synced" --source "$memory_md"
+          fi
+          current_title="${line#"## "}"
+          current_section=""
+        else
+          current_section="${current_section}${line}"$'\n'
+        fi
+      done < "$memory_md"
+      if [[ -n "$current_section" && -n "$current_title" ]]; then
+        local safe_title
+        safe_title="$(printf '%s' "$current_title" | tr -c '[:alnum:]._-' '_' | head -c 100)"
+        memory_store "ws_${agent_id}_${safe_title}" "$current_section" \
+          --tags "workspace,synced" --source "$memory_md"
+      fi
+    fi
+    new_entries="$(printf '%s' "$new_entries" | jq --arg f "$memory_md" --arg h "$file_hash" '. + {($f): $h}')"
+  fi
+
+  # Scan daily log files
+  local workspace="${agent_dir}/memory"
+  if [[ -d "$workspace" ]]; then
+    local md_file
+    for md_file in "${workspace}"/*.md; do
+      [[ -f "$md_file" ]] || continue
+      local file_hash
+      file_hash="$(hash_string "$(cat "$md_file")")"
+      local old_hash
+      old_hash="$(printf '%s' "$old_index" | jq -r --arg f "$md_file" '.[$f] // ""' 2>/dev/null)"
+      if [[ "$file_hash" != "$old_hash" ]]; then
+        updated=$((updated + 1))
+        local md_basename
+        md_basename="$(basename "$md_file" .md)"
+        local content
+        content="$(cat "$md_file" 2>/dev/null)" || continue
+        memory_store "ws_${agent_id}_daily_${md_basename}" "$content" \
+          --tags "workspace,daily,synced" --source "$md_file"
+      fi
+      new_entries="$(printf '%s' "$new_entries" | jq --arg f "$md_file" --arg h "$file_hash" '. + {($f): $h}')"
+    done
+  fi
+
+  # Write updated index
+  printf '%s\n' "$new_entries" > "$index_file"
+  chmod 600 "$index_file" 2>/dev/null || true
+
+  log_debug "Workspace sync: agent=$agent_id updated=$updated files"
+  jq -nc --arg agent "$agent_id" --argjson updated "$updated" \
+    '{agent_id: $agent, files_updated: $updated}'
+}
+
+# Combined search across KV store, workspace, and text scoring.
+# Returns merged JSON array with results from all sources.
+memory_search_all() {
+  local query="${1:-}"
+  local agent_id="${2:-main}"
+  local limit="${3:-10}"
+
+  require_command jq "memory_search_all requires jq"
+
+  if [[ -z "$query" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  local text_results workspace_results
+  text_results="$(memory_search_text "$query" "$limit")"
+  workspace_results="$(memory_search_workspace "$query" "$agent_id")"
+
+  # Merge and deduplicate by key, sort by score descending
+  printf '%s\n%s' "$text_results" "$workspace_results" | \
+    jq -s --argjson limit "$limit" \
+    '.[0] + .[1] | group_by(.key) | map(max_by(.score)) | sort_by(-.score) | .[:$limit]'
 }

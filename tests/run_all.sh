@@ -126,12 +126,16 @@ else
     "${SCRIPT_DIR}/test_autoreply.sh"
     "${SCRIPT_DIR}/test_daemon.sh"
     "${SCRIPT_DIR}/test_install.sh"
+    "${SCRIPT_DIR}/test_onboard.sh"
     "${SCRIPT_DIR}/test_heartbeat.sh"
     "${SCRIPT_DIR}/test_events.sh"
     "${SCRIPT_DIR}/test_cron_advanced.sh"
     "${SCRIPT_DIR}/test_plugin.sh"
     "${SCRIPT_DIR}/test_skills.sh"
     "${SCRIPT_DIR}/test_dedup.sh"
+    "${SCRIPT_DIR}/test_engine.sh"
+    "${SCRIPT_DIR}/test_gateway.sh"
+    "${SCRIPT_DIR}/test_workspace_session_spawn.sh"
   )
 
   INTEGRATION_FILES=(

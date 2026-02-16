@@ -131,7 +131,7 @@ boot_parse_md() {
 
   require_command jq "boot_parse_md requires jq"
 
-  local result="[]"
+  local ndjson=""
   local in_block=false
   local block_type=""
   local block_content=""
@@ -141,10 +141,10 @@ boot_parse_md() {
       if [[ "$line" == '```' ]]; then
         # End of code block
         if [[ -n "$block_content" ]]; then
-          result="$(printf '%s' "$result" | jq \
+          ndjson="${ndjson}$(jq -nc \
             --arg t "$block_type" \
             --arg c "$block_content" \
-            '. + [{type: $t, content: $c}]')"
+            '{type: $t, content: $c}')"$'\n'
         fi
         in_block=false
         block_type=""
@@ -181,7 +181,11 @@ ${line}"
     fi
   done < "$file"
 
-  printf '%s' "$result"
+  if [[ -n "$ndjson" ]]; then
+    printf '%s' "$ndjson" | jq -s '.'
+  else
+    printf '[]'
+  fi
 }
 
 # Check current boot status

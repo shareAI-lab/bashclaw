@@ -296,6 +296,10 @@ _create_default_config() {
   mkdir -p "$state_dir/extensions"
   mkdir -p "$state_dir/agents"
 
+  mkdir -p "$state_dir/workspace"
+  mkdir -p "$state_dir/workspace/skills"
+  mkdir -p "$state_dir/workspace/memory"
+
   local config_file="${state_dir}/bashclaw.json"
   if [[ -f "$config_file" ]]; then
     _info "Config already exists: $config_file"
@@ -308,7 +312,8 @@ _create_default_config() {
     "defaults": {
       "model": "claude-opus-4-6",
       "maxTurns": 50,
-      "contextTokens": 200000
+      "contextTokens": 200000,
+      "engine": "auto"
     },
     "list": []
   },

@@ -8,6 +8,30 @@ TOOL_SHELL_TIMEOUT="${TOOL_SHELL_TIMEOUT:-30}"
 TOOL_READ_FILE_MAX_LINES="${TOOL_READ_FILE_MAX_LINES:-2000}"
 TOOL_LIST_FILES_MAX="${TOOL_LIST_FILES_MAX:-500}"
 
+# ---- Tool Profiles ----
+# Named presets of tool sets. Profile is applied first, then allow/deny modify it.
+
+tools_resolve_profile() {
+  local profile_name="${1:-full}"
+  case "$profile_name" in
+    minimal)
+      echo "web_fetch web_search memory session_status"
+      ;;
+    coding)
+      echo "web_fetch web_search memory session_status shell read_file write_file list_files file_search"
+      ;;
+    messaging)
+      echo "web_fetch web_search memory session_status message agent_message agents_list"
+      ;;
+    full|"")
+      _tool_list
+      ;;
+    *)
+      _tool_list
+      ;;
+  esac
+}
+
 # ---- Tool Registry (function-based for bash 3.2 compat) ----
 
 _tool_handler() {
@@ -26,6 +50,8 @@ _tool_handler() {
     write_file)     echo "tool_write_file" ;;
     list_files)     echo "tool_list_files" ;;
     file_search)    echo "tool_file_search" ;;
+    spawn)          echo "tool_spawn" ;;
+    spawn_status)   echo "tool_spawn_status" ;;
     *)
       # Check plugin-registered tools as fallback
       local plugin_handler
@@ -38,7 +64,7 @@ _tool_handler() {
 }
 
 _tool_list() {
-  echo "web_fetch web_search shell memory cron message agents_list session_status sessions_list agent_message read_file write_file list_files file_search"
+  echo "web_fetch web_search shell memory cron message agents_list session_status sessions_list agent_message read_file write_file list_files file_search spawn spawn_status"
 }
 
 # Tool optional flag registry (tools that default to disabled unless explicitly allowed).
@@ -219,7 +245,7 @@ tools_elevated_check() {
   if [[ -n "$session_key" ]]; then
     local approval_dir="${BASHCLAW_STATE_DIR:?}/approvals"
     local safe_key
-    safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+    safe_key="$(sanitize_key "$session_key")"
     local approval_file="${approval_dir}/${safe_key}_${tool_name}.approved"
     if [[ -f "$approval_file" ]]; then
       return 0
@@ -283,207 +309,244 @@ Available tools:
 
 14. file_search - Search for files matching a name or content pattern.
     Parameters: path (string, required), name (string, optional), content (string, optional), maxResults (number, optional)
+
+15. spawn - Spawn a background subagent for long-running tasks.
+    Parameters: task (string, required), label (string, optional)
+
+16. spawn_status - Check status of a spawned background task.
+    Parameters: task_id (string, required)
 TOOLDESC
 }
 
 # ---- Tool Spec Builder (Anthropic format) ----
 
 tools_build_spec() {
+  local profile_name="${1:-}"
   require_command jq "tools_build_spec requires jq"
 
-  local specs="[]"
+  # If a profile is specified, filter the full spec to only include profile tools
+  local profile_tools=""
+  if [[ -n "$profile_name" && "$profile_name" != "full" ]]; then
+    profile_tools="$(tools_resolve_profile "$profile_name")"
+  fi
 
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "web_fetch",
-    "description": "Fetch and extract readable content from a URL. Use for lightweight page access.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "url": {"type": "string", "description": "HTTP or HTTPS URL to fetch."},
-        "maxChars": {"type": "number", "description": "Maximum characters to return."}
-      },
-      "required": ["url"]
+  local full_spec
+  full_spec="$(_tools_build_full_spec)"
+
+  if [[ -n "$profile_tools" ]]; then
+    local profile_json="[]"
+    local t
+    for t in $profile_tools; do
+      profile_json="$(printf '%s' "$profile_json" | jq --arg t "$t" '. + [$t]')"
+    done
+    printf '%s' "$full_spec" | jq --argjson p "$profile_json" '[.[] | select(.name as $n | $p | index($n))]'
+  else
+    printf '%s' "$full_spec"
+  fi
+}
+
+_tools_build_full_spec() {
+  jq -nc '[
+    {
+      "name": "web_fetch",
+      "description": "Fetch and extract readable content from a URL. Use for lightweight page access.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {"type": "string", "description": "HTTP or HTTPS URL to fetch."},
+          "maxChars": {"type": "number", "description": "Maximum characters to return."}
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "web_search",
+      "description": "Search the web. Returns titles, URLs, and snippets.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string", "description": "Search query string."},
+          "count": {"type": "number", "description": "Number of results to return (1-10)."}
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "shell",
+      "description": "Execute a shell command with timeout and safety checks.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {"type": "string", "description": "The shell command to execute."},
+          "timeout": {"type": "number", "description": "Timeout in seconds (default 30)."}
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "memory",
+      "description": "File-based key-value store for persistent agent memory. Supports get, set, delete, list, and search actions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "enum": ["get", "set", "delete", "list", "search"], "description": "The memory operation to perform."},
+          "key": {"type": "string", "description": "The key to get, set, or delete."},
+          "value": {"type": "string", "description": "The value to store (for set action)."},
+          "query": {"type": "string", "description": "Search query (for search action)."}
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "cron",
+      "description": "Manage scheduled cron jobs. Supports add, remove, and list actions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "enum": ["add", "remove", "list"], "description": "The cron operation to perform."},
+          "id": {"type": "string", "description": "Job ID (for remove)."},
+          "schedule": {"type": "string", "description": "Cron schedule expression (for add)."},
+          "command": {"type": "string", "description": "Command to execute (for add)."},
+          "agent_id": {"type": "string", "description": "Agent ID for the job."}
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "message",
+      "description": "Send a message via channel handler.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "enum": ["send"], "description": "Message action."},
+          "channel": {"type": "string", "description": "Target channel (telegram, discord, slack, etc)."},
+          "target": {"type": "string", "description": "Target chat/user ID."},
+          "message": {"type": "string", "description": "The message text to send."}
+        },
+        "required": ["action", "message"]
+      }
+    },
+    {
+      "name": "agents_list",
+      "description": "List all configured agents with their settings.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "session_status",
+      "description": "Query session info for a specific agent, channel, and sender.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {"type": "string", "description": "Agent ID to query."},
+          "channel": {"type": "string", "description": "Channel name."},
+          "sender": {"type": "string", "description": "Sender identifier."}
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "sessions_list",
+      "description": "List all active sessions across all agents.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "agent_message",
+      "description": "Send a message to another agent and get their response.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target_agent": {"type": "string", "description": "The agent ID to send the message to."},
+          "message": {"type": "string", "description": "The message to send."},
+          "from_agent": {"type": "string", "description": "The sending agent ID (optional)."}
+        },
+        "required": ["target_agent", "message"]
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file from the filesystem with optional line offset and limit.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "Absolute or relative file path to read."},
+          "offset": {"type": "number", "description": "Line number to start reading from (1-based, default 1)."},
+          "limit": {"type": "number", "description": "Maximum number of lines to return."}
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Create or overwrite a file on the filesystem. Requires elevated authorization.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "Absolute or relative file path to write."},
+          "content": {"type": "string", "description": "The content to write to the file."},
+          "append": {"type": "boolean", "description": "If true, append to the file instead of overwriting."}
+        },
+        "required": ["path", "content"]
+      }
+    },
+    {
+      "name": "list_files",
+      "description": "List files and directories at a given path.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "Directory path to list."},
+          "pattern": {"type": "string", "description": "Glob pattern to filter results (e.g. *.sh)."},
+          "recursive": {"type": "boolean", "description": "If true, list recursively."}
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "file_search",
+      "description": "Search for files by name pattern or content match.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "Directory to search in."},
+          "name": {"type": "string", "description": "Filename pattern to match (glob)."},
+          "content": {"type": "string", "description": "Search for files containing this text."},
+          "maxResults": {"type": "number", "description": "Maximum number of results to return."}
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "spawn",
+      "description": "Spawn a background subagent for long-running tasks. Returns immediately with a task ID.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task": {"type": "string", "description": "Task description for the subagent."},
+          "label": {"type": "string", "description": "Short label for the task."}
+        },
+        "required": ["task"]
+      }
+    },
+    {
+      "name": "spawn_status",
+      "description": "Check status of a spawned background task.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string", "description": "Task ID from spawn."}
+        },
+        "required": ["task_id"]
+      }
     }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "web_search",
-    "description": "Search the web. Returns titles, URLs, and snippets.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "query": {"type": "string", "description": "Search query string."},
-        "count": {"type": "number", "description": "Number of results to return (1-10)."}
-      },
-      "required": ["query"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "shell",
-    "description": "Execute a shell command with timeout and safety checks.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "command": {"type": "string", "description": "The shell command to execute."},
-        "timeout": {"type": "number", "description": "Timeout in seconds (default 30)."}
-      },
-      "required": ["command"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "memory",
-    "description": "File-based key-value store for persistent agent memory. Supports get, set, delete, list, and search actions.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "action": {"type": "string", "enum": ["get", "set", "delete", "list", "search"], "description": "The memory operation to perform."},
-        "key": {"type": "string", "description": "The key to get, set, or delete."},
-        "value": {"type": "string", "description": "The value to store (for set action)."},
-        "query": {"type": "string", "description": "Search query (for search action)."}
-      },
-      "required": ["action"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "cron",
-    "description": "Manage scheduled cron jobs. Supports add, remove, and list actions.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "action": {"type": "string", "enum": ["add", "remove", "list"], "description": "The cron operation to perform."},
-        "id": {"type": "string", "description": "Job ID (for remove)."},
-        "schedule": {"type": "string", "description": "Cron schedule expression (for add)."},
-        "command": {"type": "string", "description": "Command to execute (for add)."},
-        "agent_id": {"type": "string", "description": "Agent ID for the job."}
-      },
-      "required": ["action"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "message",
-    "description": "Send a message via channel handler.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "action": {"type": "string", "enum": ["send"], "description": "Message action."},
-        "channel": {"type": "string", "description": "Target channel (telegram, discord, slack, etc)."},
-        "target": {"type": "string", "description": "Target chat/user ID."},
-        "message": {"type": "string", "description": "The message text to send."}
-      },
-      "required": ["action", "message"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "agents_list",
-    "description": "List all configured agents with their settings.",
-    "input_schema": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "session_status",
-    "description": "Query session info for a specific agent, channel, and sender.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "agent_id": {"type": "string", "description": "Agent ID to query."},
-        "channel": {"type": "string", "description": "Channel name."},
-        "sender": {"type": "string", "description": "Sender identifier."}
-      },
-      "required": []
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "sessions_list",
-    "description": "List all active sessions across all agents.",
-    "input_schema": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "agent_message",
-    "description": "Send a message to another agent and get their response.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "target_agent": {"type": "string", "description": "The agent ID to send the message to."},
-        "message": {"type": "string", "description": "The message to send."},
-        "from_agent": {"type": "string", "description": "The sending agent ID (optional)."}
-      },
-      "required": ["target_agent", "message"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "read_file",
-    "description": "Read a file from the filesystem with optional line offset and limit.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {"type": "string", "description": "Absolute or relative file path to read."},
-        "offset": {"type": "number", "description": "Line number to start reading from (1-based, default 1)."},
-        "limit": {"type": "number", "description": "Maximum number of lines to return."}
-      },
-      "required": ["path"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "write_file",
-    "description": "Create or overwrite a file on the filesystem. Requires elevated authorization.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {"type": "string", "description": "Absolute or relative file path to write."},
-        "content": {"type": "string", "description": "The content to write to the file."},
-        "append": {"type": "boolean", "description": "If true, append to the file instead of overwriting."}
-      },
-      "required": ["path", "content"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "list_files",
-    "description": "List files and directories at a given path.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {"type": "string", "description": "Directory path to list."},
-        "pattern": {"type": "string", "description": "Glob pattern to filter results (e.g. *.sh)."},
-        "recursive": {"type": "boolean", "description": "If true, list recursively."}
-      },
-      "required": ["path"]
-    }
-  }]')"
-
-  specs="$(printf '%s' "$specs" | jq '. + [{
-    "name": "file_search",
-    "description": "Search for files by name pattern or content match.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {"type": "string", "description": "Directory to search in."},
-        "name": {"type": "string", "description": "Filename pattern to match (glob)."},
-        "content": {"type": "string", "description": "Search for files containing this text."},
-        "maxResults": {"type": "number", "description": "Maximum number of results to return."}
-      },
-      "required": ["path"]
-    }
-  }]')"
-
-  printf '%s' "$specs"
+  ]'
 }
 
 # ---- Tool: web_fetch ----
@@ -777,16 +840,22 @@ tool_memory() {
       fi
       ;;
     list)
-      local keys="[]"
+      local keys_ndjson=""
       local f
       for f in "${mem_dir}"/*.json; do
         [[ -f "$f" ]] || continue
         local k
         k="$(jq -r '.key // empty' < "$f" 2>/dev/null)"
         if [[ -n "$k" ]]; then
-          keys="$(printf '%s' "$keys" | jq --arg k "$k" '. + [$k]')"
+          keys_ndjson="${keys_ndjson}$(jq -nc --arg k "$k" '$k')"$'\n'
         fi
       done
+      local keys
+      if [[ -n "$keys_ndjson" ]]; then
+        keys="$(printf '%s' "$keys_ndjson" | jq -s '.')"
+      else
+        keys="[]"
+      fi
       jq -nc --argjson ks "$keys" '{"keys": $ks, "count": ($ks | length)}'
       ;;
     search)
@@ -794,16 +863,8 @@ tool_memory() {
         printf '{"error": "query is required for search"}'
         return 1
       fi
-      local results="[]"
-      local f
-      for f in "${mem_dir}"/*.json; do
-        [[ -f "$f" ]] || continue
-        if grep -qi "$query_str" "$f" 2>/dev/null; then
-          local entry
-          entry="$(cat "$f")"
-          results="$(printf '%s' "$results" | jq --argjson e "$entry" '. + [$e]')"
-        fi
-      done
+      local results
+      results="$(memory_search_text "$query_str" 20)"
       jq -nc --argjson r "$results" '{"results": $r, "count": ($r | length)}'
       ;;
     *)
@@ -814,8 +875,7 @@ tool_memory() {
 }
 
 _memory_safe_key() {
-  local key="$1"
-  printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200
+  sanitize_key "$1"
 }
 
 # ---- Tool: cron ----
@@ -873,14 +933,20 @@ tool_cron() {
       fi
       ;;
     list)
-      local jobs="[]"
+      local jobs_ndjson=""
       local f
       for f in "${cron_dir}"/*.json; do
         [[ -f "$f" ]] || continue
         local entry
         entry="$(cat "$f")"
-        jobs="$(printf '%s' "$jobs" | jq --argjson e "$entry" '. + [$e]')"
+        jobs_ndjson="${jobs_ndjson}${entry}"$'\n'
       done
+      local jobs
+      if [[ -n "$jobs_ndjson" ]]; then
+        jobs="$(printf '%s' "$jobs_ndjson" | jq -s '.')"
+      else
+        jobs="[]"
+      fi
       jq -nc --argjson j "$jobs" '{"jobs": $j, "count": ($j | length)}'
       ;;
     *)
@@ -1142,7 +1208,7 @@ tool_list_files() {
       find_args="-name $pattern"
     fi
     local f
-    # Use a while-read loop for bash 3.2 compat
+    local entries_ndjson=""
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
       if [ "$count" -ge "$TOOL_LIST_FILES_MAX" ]; then
@@ -1154,13 +1220,17 @@ tool_list_files() {
       fi
       local rel
       rel="${f#${path}/}"
-      entries="$(printf '%s' "$entries" | jq --arg n "$rel" --arg t "$ftype" '. + [{name: $n, type: $t}]')"
+      entries_ndjson="${entries_ndjson}$(jq -nc --arg n "$rel" --arg t "$ftype" '{name: $n, type: $t}')"$'\n'
       count=$((count + 1))
     done <<EOF
 $(find "$path" -maxdepth 10 ${find_args} 2>/dev/null | head -n "$TOOL_LIST_FILES_MAX")
 EOF
+    if [[ -n "$entries_ndjson" ]]; then
+      entries="$(printf '%s' "$entries_ndjson" | jq -s '.')"
+    fi
   else
     local f
+    local entries_ndjson=""
     for f in "${path}"/*; do
       [[ -e "$f" ]] || continue
       if [ "$count" -ge "$TOOL_LIST_FILES_MAX" ]; then
@@ -1181,9 +1251,12 @@ EOF
       elif [[ -L "$f" ]]; then
         ftype="symlink"
       fi
-      entries="$(printf '%s' "$entries" | jq --arg n "$name" --arg t "$ftype" '. + [{name: $n, type: $t}]')"
+      entries_ndjson="${entries_ndjson}$(jq -nc --arg n "$name" --arg t "$ftype" '{name: $n, type: $t}')"$'\n'
       count=$((count + 1))
     done
+    if [[ -n "$entries_ndjson" ]]; then
+      entries="$(printf '%s' "$entries_ndjson" | jq -s '.')"
+    fi
   fi
 
   jq -nc --arg p "$path" --argjson e "$entries" --argjson c "$count" \
@@ -1224,7 +1297,7 @@ tool_file_search() {
     return 1
   fi
 
-  local results="[]"
+  local results_ndjson=""
   local count=0
 
   if [[ -n "$name_pattern" && -z "$content_pattern" ]]; then
@@ -1235,7 +1308,7 @@ tool_file_search() {
         break
       fi
       local rel="${f#${path}/}"
-      results="$(printf '%s' "$results" | jq --arg p "$rel" '. + [{path: $p}]')"
+      results_ndjson="${results_ndjson}$(jq -nc --arg p "$rel" '{path: $p}')"$'\n'
       count=$((count + 1))
     done <<EOF
 $(find "$path" -name "$name_pattern" -type f 2>/dev/null | head -n "$max_results")
@@ -1250,8 +1323,8 @@ EOF
       local rel="${f#${path}/}"
       local match_line
       match_line="$(grep -n -m1 "$content_pattern" "$f" 2>/dev/null | head -1 | cut -d: -f1)"
-      results="$(printf '%s' "$results" | jq --arg p "$rel" --arg l "${match_line:-0}" \
-        '. + [{path: $p, line: ($l | tonumber)}]')"
+      results_ndjson="${results_ndjson}$(jq -nc --arg p "$rel" --arg l "${match_line:-0}" \
+        '{path: $p, line: ($l | tonumber)}')"$'\n'
       count=$((count + 1))
     done <<EOF
 $(grep -rl "$content_pattern" "$path" 2>/dev/null | head -n "$max_results")
@@ -1267,8 +1340,8 @@ EOF
         local rel="${f#${path}/}"
         local match_line
         match_line="$(grep -n -m1 "$content_pattern" "$f" 2>/dev/null | head -1 | cut -d: -f1)"
-        results="$(printf '%s' "$results" | jq --arg p "$rel" --arg l "${match_line:-0}" \
-          '. + [{path: $p, line: ($l | tonumber)}]')"
+        results_ndjson="${results_ndjson}$(jq -nc --arg p "$rel" --arg l "${match_line:-0}" \
+          '{path: $p, line: ($l | tonumber)}')"$'\n'
         count=$((count + 1))
       fi
     done <<EOF
@@ -1276,8 +1349,78 @@ $(find "$path" -name "$name_pattern" -type f 2>/dev/null | head -n 500)
 EOF
   fi
 
+  local results
+  if [[ -n "$results_ndjson" ]]; then
+    results="$(printf '%s' "$results_ndjson" | jq -s '.')"
+  else
+    results="[]"
+  fi
   jq -nc --arg p "$path" --argjson r "$results" --argjson c "$count" \
     '{path: $p, results: $r, count: $c}'
+}
+
+# ---- Tool: spawn ----
+
+tool_spawn() {
+  local input="$1"
+  require_command jq "spawn tool requires jq"
+
+  local task label
+  task="$(printf '%s' "$input" | jq -r '.task // empty')"
+  label="$(printf '%s' "$input" | jq -r '.label // empty')"
+  label="${label:-background}"
+
+  if [[ -z "$task" ]]; then
+    printf '{"error": "task parameter is required"}'
+    return 1
+  fi
+
+  local spawn_id
+  spawn_id="$(uuid_generate | cut -c1-8)"
+  local spawn_dir="${BASHCLAW_STATE_DIR:?}/spawn"
+  mkdir -p "$spawn_dir"
+
+  local started_at
+  started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  printf '{"id":"%s","label":"%s","status":"running","started_at":"%s"}\n' \
+    "$spawn_id" "$label" "$started_at" > "${spawn_dir}/${spawn_id}.json"
+
+  (
+    local result
+    result="$(engine_run "main" "$task" "spawn" "subagent" "true" 2>/dev/null)" || result="error: subagent failed"
+    jq -nc \
+      --arg id "$spawn_id" \
+      --arg label "$label" \
+      --arg result "$result" \
+      --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+      '{id: $id, label: $label, status: "completed", result: $result, completed_at: $ts}' \
+      > "${spawn_dir}/${spawn_id}.json"
+  ) &
+
+  printf 'Subagent "%s" started (id: %s). Use spawn_status to check progress.' "$label" "$spawn_id"
+}
+
+# ---- Tool: spawn_status ----
+
+tool_spawn_status() {
+  local input="$1"
+  require_command jq "spawn_status tool requires jq"
+
+  local task_id
+  task_id="$(printf '%s' "$input" | jq -r '.task_id // empty')"
+
+  if [[ -z "$task_id" ]]; then
+    printf '{"error": "task_id parameter is required"}'
+    return 1
+  fi
+
+  local status_file="${BASHCLAW_STATE_DIR:?}/spawn/${task_id}.json"
+  if [[ -f "$status_file" ]]; then
+    cat "$status_file"
+  else
+    printf '{"error":"task not found","id":"%s"}' "$task_id"
+  fi
 }
 
 # ---- SSRF helper ----

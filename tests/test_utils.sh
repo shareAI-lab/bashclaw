@@ -202,4 +202,89 @@ else
 fi
 teardown_test_env
 
+# ---- sanitize_key handles special characters ----
+
+test_start "sanitize_key replaces special characters"
+setup_test_env
+result="$(sanitize_key "hello@world/test:foo")"
+assert_match "$result" '^[a-zA-Z0-9._-]+$'
+assert_not_contains "$result" "@"
+assert_not_contains "$result" "/"
+teardown_test_env
+
+test_start "sanitize_key respects max length"
+setup_test_env
+long_input="$(printf 'a%.0s' {1..300})"
+result="$(sanitize_key "$long_input" 50)"
+len="${#result}"
+assert_ge 50 "$len"
+teardown_test_env
+
+test_start "sanitize_key handles empty string"
+setup_test_env
+result="$(sanitize_key "")"
+assert_eq "$result" ""
+teardown_test_env
+
+# ---- require_command caches results ----
+
+test_start "require_command caches successful check"
+setup_test_env
+_REQUIRE_CMD_VERIFIED=""
+require_command jq "jq is needed"
+assert_contains "$_REQUIRE_CMD_VERIFIED" "jq"
+teardown_test_env
+
+# ---- timestamp_ms returns a number ----
+
+test_start "timestamp_ms returns a number"
+setup_test_env
+ts="$(timestamp_ms)"
+assert_match "$ts" '^[0-9]+$'
+assert_gt "$ts" 1700000000000
+teardown_test_env
+
+# ---- retry_with_backoff returns 0 on immediate success ----
+
+test_start "retry_with_backoff succeeds immediately"
+setup_test_env
+_rb_test_cmd() { return 0; }
+if retry_with_backoff 3 0 _rb_test_cmd; then
+  _test_pass
+else
+  _test_fail "should succeed immediately"
+fi
+unset -f _rb_test_cmd
+teardown_test_env
+
+# ---- retry_with_backoff returns 1 after all attempts fail ----
+
+test_start "retry_with_backoff fails after max attempts"
+setup_test_env
+_rb_fail_cmd() { return 1; }
+set +e
+retry_with_backoff 1 0 _rb_fail_cmd
+rc=$?
+set -e
+assert_ne "$rc" "0"
+unset -f _rb_fail_cmd
+teardown_test_env
+
+# ---- json_escape handles empty string ----
+
+test_start "json_escape handles empty string"
+setup_test_env
+result="$(json_escape "")"
+assert_eq "$result" '""'
+teardown_test_env
+
+# ---- url_encode handles special characters ----
+
+test_start "url_encode handles spaces and special chars"
+setup_test_env
+result="$(url_encode "hello world&foo=bar")"
+assert_contains "$result" "hello"
+assert_not_contains "$result" " "
+teardown_test_env
+
 report_results

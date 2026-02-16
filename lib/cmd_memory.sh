@@ -110,7 +110,7 @@ _cmd_memory_get() {
 
   local mem_dir="${BASHCLAW_STATE_DIR:?}/memory"
   local safe_key
-  safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$key")"
   local file="${mem_dir}/${safe_key}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -146,7 +146,7 @@ _cmd_memory_set() {
   ensure_dir "$mem_dir"
 
   local safe_key
-  safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$key")"
   local file="${mem_dir}/${safe_key}.json"
   local ts
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -175,7 +175,7 @@ _cmd_memory_delete() {
 
   local mem_dir="${BASHCLAW_STATE_DIR:?}/memory"
   local safe_key
-  safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$key")"
   local file="${mem_dir}/${safe_key}.json"
 
   if [[ -f "$file" ]]; then
@@ -205,14 +205,21 @@ _cmd_memory_export() {
     return 0
   fi
 
-  local result="[]"
+  local ndjson=""
   local f
   for f in "${mem_dir}"/*.json; do
     [[ -f "$f" ]] || continue
     local entry
     entry="$(cat "$f" 2>/dev/null)" || continue
-    result="$(printf '%s' "$result" | jq --argjson e "$entry" '. + [$e]')"
+    ndjson="${ndjson}${entry}"$'\n'
   done
+
+  local result
+  if [[ -n "$ndjson" ]]; then
+    result="$(printf '%s' "$ndjson" | jq -s '.')"
+  else
+    result="[]"
+  fi
 
   if [[ -n "$output" ]]; then
     printf '%s\n' "$result" | jq '.' > "$output"
@@ -256,7 +263,7 @@ _cmd_memory_import() {
       continue
     fi
     local safe_key
-    safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+    safe_key="$(sanitize_key "$key")"
     printf '%s\n' "$entry" > "${mem_dir}/${safe_key}.json"
     count=$((count + 1))
   done <<< "$entries"

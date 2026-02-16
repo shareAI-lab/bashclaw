@@ -96,8 +96,8 @@ _daemon_install_launchd() {
     <key>ProgramArguments</key>
     <array>
         <string>bash</string>
-        <string>${bashclaw_bin}</string>
-        <string>gateway</string>
+        <string>-c</string>
+        <string>source "${BASHCLAW_STATE_DIR}/.env" 2>/dev/null; exec bash "${bashclaw_bin}" gateway</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -146,6 +146,7 @@ Wants=network-online.target
 Type=simple
 ExecStart=bash ${bashclaw_bin} gateway
 Environment=BASHCLAW_STATE_DIR=${BASHCLAW_STATE_DIR}
+EnvironmentFile=-${BASHCLAW_STATE_DIR}/.env
 Restart=always
 RestartSec=5
 

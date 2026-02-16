@@ -98,7 +98,7 @@ _cmd_cron_add() {
   local ts
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   local safe_id
-  safe_id="$(printf '%s' "$job_id" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "$job_id")"
 
   jq -nc \
     --arg id "$job_id" \
@@ -126,7 +126,7 @@ _cmd_cron_remove() {
 
   local cron_dir="${BASHCLAW_STATE_DIR:?}/cron"
   local safe_id
-  safe_id="$(printf '%s' "$job_id" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "$job_id")"
   local file="${cron_dir}/${safe_id}.json"
 
   if [[ -f "$file" ]]; then
@@ -151,7 +151,7 @@ _cmd_cron_toggle() {
 
   local cron_dir="${BASHCLAW_STATE_DIR:?}/cron"
   local safe_id
-  safe_id="$(printf '%s' "$job_id" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "$job_id")"
   local file="${cron_dir}/${safe_id}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -183,7 +183,7 @@ _cmd_cron_run() {
 
   local cron_dir="${BASHCLAW_STATE_DIR:?}/cron"
   local safe_id
-  safe_id="$(printf '%s' "$job_id" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "$job_id")"
   local file="${cron_dir}/${safe_id}.json"
 
   if [[ ! -f "$file" ]]; then

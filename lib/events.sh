@@ -15,7 +15,7 @@ events_dir() {
 
 # Sanitize a session key for use as a filename
 _events_safe_key() {
-  printf '%s' "$1" | tr -c '[:alnum:]._-' '_' | head -c 200
+  sanitize_key "$1"
 }
 
 # Enqueue a system event for a session.

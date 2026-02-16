@@ -3,12 +3,789 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>BashClaw</title>
-<link rel="stylesheet" href="/ui/style.css">
+<title>BashClaw Dashboard</title>
+<style>
+/* ---- CSS Variables (Dark Theme Default) ---- */
+:root {
+  --bg: #0f1219;
+  --bg-secondary: #161b26;
+  --bg-card: #1c2333;
+  --bg-input: #0c0f16;
+  --bg-hover: #232d3f;
+  --text: #dce1ea;
+  --text-secondary: #8892a4;
+  --text-muted: #525d70;
+  --accent: #22d3ee;
+  --accent-hover: #06b6d4;
+  --accent-dim: rgba(34, 211, 238, 0.12);
+  --accent-strong: rgba(34, 211, 238, 0.25);
+  --success: #4ade80;
+  --success-dim: rgba(74, 222, 128, 0.12);
+  --warn: #fbbf24;
+  --warn-dim: rgba(251, 191, 36, 0.12);
+  --error: #f87171;
+  --error-dim: rgba(248, 113, 113, 0.12);
+  --border: #262f3d;
+  --border-active: #3b4861;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  --nav-height: 48px;
+  --sidebar-width: 0px;
+}
+
+[data-theme="light"] {
+  --bg: #f0f2f5;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: #f5f6f8;
+  --bg-hover: #ebedf0;
+  --text: #1a2332;
+  --text-secondary: #4a5568;
+  --text-muted: #94a3b8;
+  --accent: #0891b2;
+  --accent-hover: #0e7490;
+  --accent-dim: rgba(8, 145, 178, 0.08);
+  --accent-strong: rgba(8, 145, 178, 0.15);
+  --success: #16a34a;
+  --success-dim: rgba(22, 163, 74, 0.08);
+  --warn: #d97706;
+  --warn-dim: rgba(217, 119, 6, 0.08);
+  --error: #dc2626;
+  --error-dim: rgba(220, 38, 38, 0.08);
+  --border: #e2e8f0;
+  --border-active: #cbd5e1;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f0f2f5;
+    --bg-secondary: #ffffff;
+    --bg-card: #ffffff;
+    --bg-input: #f5f6f8;
+    --bg-hover: #ebedf0;
+    --text: #1a2332;
+    --text-secondary: #4a5568;
+    --text-muted: #94a3b8;
+    --accent: #0891b2;
+    --accent-hover: #0e7490;
+    --accent-dim: rgba(8, 145, 178, 0.08);
+    --accent-strong: rgba(8, 145, 178, 0.15);
+    --success: #16a34a;
+    --success-dim: rgba(22, 163, 74, 0.08);
+    --warn: #d97706;
+    --warn-dim: rgba(217, 119, 6, 0.08);
+    --error: #dc2626;
+    --error-dim: rgba(220, 38, 38, 0.08);
+    --border: #e2e8f0;
+    --border-active: #cbd5e1;
+    --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  }
+}
+
+/* ---- Reset ---- */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---- Navigation ---- */
+#nav {
+  display: flex;
+  align-items: center;
+  height: var(--nav-height);
+  padding: 0 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 8px;
+  z-index: 10;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.nav-logo {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.nav-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.nav-version {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.nav-tabs::-webkit-scrollbar { display: none; }
+
+.nav-tab {
+  padding: 5px 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  font-family: var(--font);
+}
+.nav-tab:hover {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.nav-tab.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.nav-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  transition: all 0.15s;
+  line-height: 1;
+  font-family: var(--font);
+}
+.nav-btn:hover {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+/* ---- Panels ---- */
+.panel {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.panel.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Container ---- */
+.container {
+  padding: 20px;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ---- Section ---- */
+.section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.section-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.section-header h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.section-body {
+  padding: 16px;
+}
+
+/* ---- Chat Panel ---- */
+.chat-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.chat-toolbar select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  max-width: 180px;
+}
+.chat-toolbar select:focus {
+  border-color: var(--accent);
+}
+
+.chat-toolbar label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-msg {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  line-height: 1.6;
+  word-wrap: break-word;
+}
+.chat-msg.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  white-space: pre-wrap;
+}
+.chat-msg.assistant {
+  align-self: flex-start;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.chat-msg.assistant p { margin-bottom: 8px; }
+.chat-msg.assistant p:last-child { margin-bottom: 0; }
+.chat-msg.assistant code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-input);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.chat-msg.assistant pre {
+  background: var(--bg-input);
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 8px 0;
+  white-space: pre;
+}
+.chat-msg.assistant pre code {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.chat-msg.assistant a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.chat-msg.assistant strong { font-weight: 600; }
+.chat-msg.assistant em { font-style: italic; }
+.chat-msg.assistant ul, .chat-msg.assistant ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.chat-msg.assistant li { margin-bottom: 2px; }
+
+.chat-msg.system {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+  padding: 4px 8px;
+}
+
+.chat-msg.thinking {
+  align-self: flex-start;
+  color: var(--text-muted);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.chat-input-area {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+#chat-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  resize: none;
+  max-height: 120px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#chat-input:focus { border-color: var(--accent); }
+#chat-input::placeholder { color: var(--text-muted); }
+
+.chat-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding: 0 2px;
+}
+.chat-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ---- Status Panel ---- */
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.status-card {
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border-radius: var(--radius);
+}
+.status-card .label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.status-card .value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.status-card .value.ok { color: var(--success); }
+.status-card .value.warn { color: var(--warn); }
+.status-card .value.error { color: var(--error); }
+
+.health-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.health-dot.ok { background: var(--success); }
+.health-dot.warn { background: var(--warn); }
+.health-dot.error { background: var(--error); }
+
+.activity-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.activity-item .time {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.activity-item .text {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+/* ---- Agents Panel ---- */
+.agent-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.agent-card:last-child { margin-bottom: 0; }
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+  background: var(--bg-input);
+}
+.agent-card-header:hover { background: var(--bg-hover); }
+.agent-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.agent-card-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.agent-card-badge.primary {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.agent-card-badge.secondary {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.agent-card-body {
+  padding: 12px 14px;
+  display: none;
+  border-top: 1px solid var(--border);
+}
+.agent-card-body.open { display: block; }
+.agent-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+.agent-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-detail .label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.agent-detail .value {
+  font-size: 13px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+/* ---- Sessions Panel ---- */
+.sessions-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.sessions-table th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.sessions-table td {
+  padding: 8px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.sessions-table tr:last-child td { border-bottom: none; }
+.sessions-table tr:hover td { background: var(--bg-hover); }
+.sessions-table .name-cell {
+  font-family: var(--font-mono);
+  color: var(--text);
+  font-weight: 500;
+}
+.sessions-table .actions-cell {
+  text-align: right;
+}
+
+/* ---- Config Panel ---- */
+.config-json {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.config-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0 0 0;
+}
+/* JSON syntax colors */
+.json-key { color: #7dd3fc; }
+.json-string { color: #86efac; }
+.json-number { color: #fbbf24; }
+.json-bool { color: #c084fc; }
+.json-null { color: var(--text-muted); }
+[data-theme="light"] .json-key { color: #0369a1; }
+[data-theme="light"] .json-string { color: #15803d; }
+[data-theme="light"] .json-number { color: #b45309; }
+[data-theme="light"] .json-bool { color: #7e22ce; }
+
+/* ---- Logs Panel ---- */
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.logs-toolbar .filter-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font);
+}
+.logs-toolbar .filter-btn:hover { background: var(--bg-hover); }
+.logs-toolbar .filter-btn.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.logs-toolbar .filter-btn.level-error.active { background: var(--error-dim); color: var(--error); border-color: var(--error); }
+.logs-toolbar .filter-btn.level-warn.active { background: var(--warn-dim); color: var(--warn); border-color: var(--warn); }
+.logs-toolbar .filter-btn.level-info.active { background: var(--success-dim); color: var(--success); border-color: var(--success); }
+.logs-toolbar .filter-btn.level-debug.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+
+.logs-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.logs-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.log-entries {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.log-entry {
+  padding: 3px 0;
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.log-entry:last-child { border-bottom: none; }
+.log-ts {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.log-level {
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 44px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.log-level.error { color: var(--error); }
+.log-level.warn { color: var(--warn); }
+.log-level.info { color: var(--success); }
+.log-level.debug { color: var(--accent); }
+.log-text {
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* ---- Buttons ---- */
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+.btn-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.btn-danger {
+  color: var(--error);
+  border-color: var(--error);
+}
+.btn-danger:hover {
+  background: var(--error-dim);
+  color: var(--error);
+  border-color: var(--error);
+}
+
+/* ---- Empty State ---- */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 640px) {
+  #nav { padding: 0 8px; gap: 4px; }
+  .nav-title { display: none; }
+  .nav-tab { padding: 4px 8px; font-size: 11px; }
+  .container { padding: 12px; gap: 12px; }
+  .chat-msg { max-width: 92%; }
+  .status-grid { grid-template-columns: repeat(2, 1fr); }
+  .agent-detail-grid { grid-template-columns: 1fr; }
+  .sessions-table { font-size: 11px; }
+  .sessions-table th, .sessions-table td { padding: 6px 8px; }
+  .chat-toolbar { flex-wrap: wrap; }
+  .chat-toolbar select { max-width: 120px; }
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ---- Notification badge ---- */
+.conn-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.conn-indicator.disconnected { background: var(--error); }
+</style>
 </head>
 <body>
 <div id="app">
 
+  <!-- Navigation -->
   <nav id="nav">
     <div class="nav-brand">
       <span class="nav-logo">&gt;_</span>
@@ -17,90 +794,1004 @@
     </div>
     <div class="nav-tabs">
       <button class="nav-tab active" data-tab="chat">Chat</button>
-      <button class="nav-tab" data-tab="settings">Settings</button>
       <button class="nav-tab" data-tab="status">Status</button>
+      <button class="nav-tab" data-tab="agents">Agents</button>
+      <button class="nav-tab" data-tab="sessions">Sessions</button>
+      <button class="nav-tab" data-tab="config">Config</button>
+      <button class="nav-tab" data-tab="logs">Logs</button>
     </div>
-    <button class="nav-theme" id="theme-toggle" title="Toggle theme">
-      <span id="theme-icon">&#9789;</span>
-    </button>
+    <div class="nav-right">
+      <span class="conn-indicator" id="conn-indicator" title="Connection status"></span>
+      <button class="nav-btn" id="theme-toggle" title="Toggle theme">
+        <span id="theme-icon">&#9789;</span>
+      </button>
+    </div>
   </nav>
 
   <!-- Chat Panel -->
   <main id="panel-chat" class="panel active">
-    <div id="chat-messages" class="chat-messages"></div>
-    <div class="chat-input-area">
-      <div class="chat-input-row">
-        <textarea id="chat-input" placeholder="Type a message..." rows="1" autocomplete="off"></textarea>
-        <button id="chat-send" class="btn btn-primary" disabled>Send</button>
+    <div class="chat-layout">
+      <div class="chat-toolbar">
+        <label for="chat-agent">Agent:</label>
+        <select id="chat-agent"><option value="main">main</option></select>
+        <label for="chat-session">Session:</label>
+        <select id="chat-session"><option value="">default</option></select>
       </div>
-      <div class="chat-controls">
-        <button id="chat-clear" class="btn btn-sm">Clear session</button>
-        <span class="chat-status" id="chat-status"></span>
-      </div>
-    </div>
-  </main>
-
-  <!-- Settings Panel -->
-  <main id="panel-settings" class="panel">
-    <div class="settings-container">
-
-      <section class="settings-section">
-        <h2>API Keys</h2>
-        <p class="settings-desc">Configure provider API keys. Keys are stored in <code>~/.bashclaw/.env</code> and never sent to the frontend.</p>
-        <div id="env-list" class="env-list"></div>
-      </section>
-
-      <section class="settings-section">
-        <h2>Model</h2>
-        <p class="settings-desc">Select the default model for the main agent.</p>
-        <div class="form-group">
-          <label for="model-select">Active Model</label>
-          <select id="model-select" class="form-control"></select>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-input-area">
+        <div class="chat-input-row">
+          <textarea id="chat-input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="1" autocomplete="off"></textarea>
+          <button id="chat-send" class="btn btn-primary" disabled>Send</button>
         </div>
-        <div id="model-info" class="model-info"></div>
-      </section>
-
-      <section class="settings-section">
-        <h2>Channels</h2>
-        <p class="settings-desc">Installed communication channels.</p>
-        <div id="channels-list" class="channels-list"></div>
-      </section>
-
+        <div class="chat-footer">
+          <button id="chat-clear" class="btn btn-sm">Clear</button>
+          <span class="chat-status" id="chat-status"></span>
+        </div>
+      </div>
     </div>
   </main>
 
   <!-- Status Panel -->
   <main id="panel-status" class="panel">
-    <div class="status-container">
-
-      <section class="status-section">
-        <h2>System</h2>
-        <div id="status-system" class="status-grid"></div>
-      </section>
-
-      <section class="status-section">
-        <h2>Sessions</h2>
-        <div id="status-sessions" class="sessions-list"></div>
-      </section>
-
+    <div class="container" id="status-content">
+      <div class="section">
+        <div class="section-header">
+          <h2>System Health</h2>
+          <button class="btn btn-sm" id="status-refresh">Refresh</button>
+        </div>
+        <div class="section-body">
+          <div class="status-grid" id="status-grid"></div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-header"><h2>Engine Detection</h2></div>
+        <div class="section-body">
+          <div class="status-grid" id="engine-grid"></div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-header"><h2>Recent Activity</h2></div>
+        <div class="section-body">
+          <div class="activity-feed" id="activity-feed">
+            <div class="empty-state">No recent activity recorded</div>
+          </div>
+        </div>
+      </div>
     </div>
   </main>
 
-  <!-- First-run overlay -->
-  <div id="onboard-overlay" class="overlay hidden">
-    <div class="overlay-card">
-      <h1>&gt;_ BashClaw</h1>
-      <p>Welcome. To get started, configure at least one AI provider API key.</p>
-      <div id="onboard-keys" class="env-list"></div>
-      <div class="overlay-actions">
-        <button id="onboard-skip" class="btn">Skip for now</button>
-        <button id="onboard-save" class="btn btn-primary">Save &amp; Start</button>
+  <!-- Agents Panel -->
+  <main id="panel-agents" class="panel">
+    <div class="container">
+      <div class="section">
+        <div class="section-header">
+          <h2>Configured Agents</h2>
+          <button class="btn btn-sm" id="agents-refresh">Refresh</button>
+        </div>
+        <div class="section-body" id="agents-list">
+          <div class="empty-state">Loading agents...</div>
+        </div>
       </div>
     </div>
-  </div>
+  </main>
+
+  <!-- Sessions Panel -->
+  <main id="panel-sessions" class="panel">
+    <div class="container">
+      <div class="section">
+        <div class="section-header">
+          <h2>Active Sessions</h2>
+          <button class="btn btn-sm" id="sessions-refresh">Refresh</button>
+        </div>
+        <div class="section-body" id="sessions-list">
+          <div class="empty-state">Loading sessions...</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Config Panel -->
+  <main id="panel-config" class="panel">
+    <div class="container">
+      <div class="section">
+        <div class="section-header">
+          <h2>Configuration (read-only)</h2>
+          <button class="btn btn-sm" id="config-refresh">Refresh</button>
+        </div>
+        <div class="section-body">
+          <div class="config-json" id="config-json">Loading...</div>
+          <div class="config-path" id="config-path"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Logs Panel -->
+  <main id="panel-logs" class="panel">
+    <div class="container">
+      <div class="section">
+        <div class="section-header">
+          <h2>Log Viewer</h2>
+          <div class="logs-toolbar">
+            <button class="filter-btn level-error active" data-level="error">Error</button>
+            <button class="filter-btn level-warn active" data-level="warn">Warn</button>
+            <button class="filter-btn level-info active" data-level="info">Info</button>
+            <button class="filter-btn level-debug" data-level="debug">Debug</button>
+            <div class="logs-toggle">
+              <input type="checkbox" id="logs-auto-refresh">
+              <label for="logs-auto-refresh">Auto-refresh</label>
+            </div>
+          </div>
+        </div>
+        <div class="section-body">
+          <div class="log-entries" id="log-entries">
+            <div class="empty-state">No log entries available. Logs are read from the gateway log file when available.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
 
 </div>
 
-<script src="/ui/app.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  // ---- State ----
+  var state = {
+    currentTab: 'chat',
+    sessions: [],
+    agents: {},
+    config: null,
+    messages: [],
+    status: null,
+    models: [],
+    logs: [],
+    logLevels: { error: true, warn: true, info: true, debug: false },
+    logsAutoRefresh: false,
+    chatBusy: false,
+    polling: {
+      status: null,
+      chat: null,
+      logs: null
+    },
+    theme: localStorage.getItem('bashclaw-theme') || 'auto',
+    connected: false,
+    startTime: Date.now()
+  };
+
+  // ---- API Helper ----
+  var API = {
+    base: window.location.origin,
+
+    request: function(method, path, body, timeout) {
+      var opts = {
+        method: method,
+        headers: { 'Content-Type': 'application/json' }
+      };
+      if (body) opts.body = JSON.stringify(body);
+
+      var controller = null;
+      var signal = undefined;
+      if (typeof AbortController !== 'undefined' && timeout) {
+        controller = new AbortController();
+        signal = controller.signal;
+        opts.signal = signal;
+        setTimeout(function() { controller.abort(); }, timeout);
+      }
+
+      return fetch(API.base + path, opts)
+        .then(function(r) {
+          if (!r.ok) {
+            return r.text().then(function(t) {
+              try { throw JSON.parse(t); } catch(e) {
+                if (e && e.error) throw e;
+                throw { error: t || r.statusText, status: r.status };
+              }
+            });
+          }
+          return r.json();
+        });
+    },
+
+    getStatus: function() { return API.request('GET', '/api/status', null, 5000); },
+    getConfig: function() { return API.request('GET', '/api/config', null, 5000); },
+    getModels: function() { return API.request('GET', '/api/models', null, 5000); },
+    getSessions: function() { return API.request('GET', '/api/sessions', null, 5000); },
+    getChannels: function() { return API.request('GET', '/api/channels', null, 5000); },
+    health: function() { return API.request('GET', '/health', null, 3000); },
+
+    chat: function(message, agent, session) {
+      return API.request('POST', '/api/chat', {
+        message: message,
+        agent: agent || 'main',
+        session: session || '',
+        channel: 'web',
+        sender: 'dashboard'
+      }, 120000);
+    },
+
+    clearSession: function(agent) {
+      return API.request('POST', '/api/sessions/clear', {
+        agent: agent || 'main',
+        channel: 'web',
+        sender: 'dashboard'
+      }, 5000);
+    }
+  };
+
+  // ---- DOM Helpers ----
+  function $(sel) { return document.querySelector(sel); }
+  function $$(sel) { return document.querySelectorAll(sel); }
+
+  function el(tag, attrs, children) {
+    var e = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function(k) {
+        if (k === 'className') e.className = attrs[k];
+        else if (k === 'textContent') e.textContent = attrs[k];
+        else if (k === 'innerHTML') e.innerHTML = attrs[k];
+        else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2).toLowerCase(), attrs[k]);
+        else e.setAttribute(k, attrs[k]);
+      });
+    }
+    if (children) {
+      (Array.isArray(children) ? children : [children]).forEach(function(c) {
+        if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+        else if (c) e.appendChild(c);
+      });
+    }
+    return e;
+  }
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // ---- Theme ----
+  function applyTheme(theme) {
+    state.theme = theme;
+    localStorage.setItem('bashclaw-theme', theme);
+    if (theme === 'auto') {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+    var icon = $('#theme-icon');
+    if (icon) {
+      if (theme === 'dark') icon.textContent = '\u263D';
+      else if (theme === 'light') icon.textContent = '\u2600';
+      else icon.textContent = '\u25D0';
+    }
+  }
+
+  function cycleTheme() {
+    var order = ['dark', 'light', 'auto'];
+    var idx = order.indexOf(state.theme);
+    applyTheme(order[(idx + 1) % order.length]);
+  }
+
+  // ---- Hash Routing ----
+  function switchTab(tab) {
+    state.currentTab = tab;
+    window.location.hash = '#' + tab;
+    $$('.nav-tab').forEach(function(t) {
+      t.classList.toggle('active', t.getAttribute('data-tab') === tab);
+    });
+    $$('.panel').forEach(function(p) {
+      p.classList.toggle('active', p.id === 'panel-' + tab);
+    });
+
+    stopAllPolling();
+    if (tab === 'status') { loadStatus(); startPolling('status', loadStatus, 5000); }
+    if (tab === 'agents') loadAgents();
+    if (tab === 'sessions') { loadSessions(); startPolling('status', loadSessions, 5000); }
+    if (tab === 'config') loadConfig();
+    if (tab === 'logs') loadLogs();
+    if (tab === 'chat') startPolling('chat', checkConnection, 10000);
+  }
+
+  function hashRoute() {
+    var hash = window.location.hash.replace('#', '') || 'chat';
+    var valid = ['chat', 'status', 'agents', 'sessions', 'config', 'logs'];
+    if (valid.indexOf(hash) === -1) hash = 'chat';
+    switchTab(hash);
+  }
+
+  // ---- Polling Manager ----
+  function startPolling(key, fn, interval) {
+    stopPolling(key);
+    state.polling[key] = setInterval(fn, interval);
+  }
+
+  function stopPolling(key) {
+    if (state.polling[key]) {
+      clearInterval(state.polling[key]);
+      state.polling[key] = null;
+    }
+  }
+
+  function stopAllPolling() {
+    Object.keys(state.polling).forEach(function(k) { stopPolling(k); });
+  }
+
+  // ---- Connection Check ----
+  function checkConnection() {
+    API.health()
+      .then(function() { setConnected(true); })
+      .catch(function() { setConnected(false); });
+  }
+
+  function setConnected(val) {
+    state.connected = val;
+    var dot = $('#conn-indicator');
+    if (dot) dot.classList.toggle('disconnected', !val);
+  }
+
+  // ---- Markdown Renderer ----
+  function renderMarkdown(text) {
+    if (!text) return '';
+
+    // Preserve code blocks first
+    var codeBlocks = [];
+    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+      var idx = codeBlocks.length;
+      codeBlocks.push('<pre><code>' + escapeHtml(code.trimEnd()) + '</code></pre>');
+      return '\x00CODEBLOCK' + idx + '\x00';
+    });
+
+    // Inline code
+    text = text.replace(/`([^`\n]+)`/g, function(_, code) {
+      return '<code>' + escapeHtml(code) + '</code>';
+    });
+
+    // Bold
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic
+    text = text.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+    // Links
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+    // Split into paragraphs
+    var parts = text.split(/\n\n+/);
+    var html = parts.map(function(part) {
+      part = part.trim();
+      if (!part) return '';
+      if (part.indexOf('\x00CODEBLOCK') === 0) return part;
+      // Handle single line breaks within a paragraph
+      part = part.replace(/\n/g, '<br>');
+      return '<p>' + part + '</p>';
+    }).join('');
+
+    // Restore code blocks
+    codeBlocks.forEach(function(block, i) {
+      html = html.replace('\x00CODEBLOCK' + i + '\x00', block);
+      html = html.replace('<p>' + block + '</p>', block);
+    });
+
+    return html;
+  }
+
+  // ---- JSON Syntax Highlighter ----
+  function highlightJson(jsonStr) {
+    return jsonStr.replace(
+      /("(?:\\.|[^"\\])*")\s*:/g,
+      '<span class="json-key">$1</span>:'
+    ).replace(
+      /:\s*("(?:\\.|[^"\\])*")/g,
+      ': <span class="json-string">$1</span>'
+    ).replace(
+      /:\s*(-?\d+\.?\d*(?:[eE][+-]?\d+)?)/g,
+      ': <span class="json-number">$1</span>'
+    ).replace(
+      /:\s*(true|false)/g,
+      ': <span class="json-bool">$1</span>'
+    ).replace(
+      /:\s*(null)/g,
+      ': <span class="json-null">$1</span>'
+    );
+  }
+
+  // ---- Chat ----
+  function addChatMessage(role, text) {
+    var container = $('#chat-messages');
+    var msg = el('div', { className: 'chat-msg ' + role });
+
+    if (role === 'assistant') {
+      msg.innerHTML = renderMarkdown(text);
+    } else if (role === 'thinking') {
+      msg.appendChild(el('div', { className: 'chat-spinner' }));
+      msg.appendChild(document.createTextNode('Thinking...'));
+    } else if (role === 'user') {
+      msg.textContent = text;
+    } else {
+      msg.textContent = text;
+    }
+
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+    return msg;
+  }
+
+  function removeChatMessage(msgEl) {
+    if (msgEl && msgEl.parentNode) msgEl.parentNode.removeChild(msgEl);
+  }
+
+  function sendChat() {
+    var input = $('#chat-input');
+    var text = input.value.trim();
+    if (!text || state.chatBusy) return;
+
+    var agent = $('#chat-agent').value;
+
+    addChatMessage('user', text);
+    state.messages.push({ role: 'user', content: text });
+
+    input.value = '';
+    input.style.height = 'auto';
+    updateSendButton();
+
+    state.chatBusy = true;
+    setChatStatus('Thinking...');
+    var thinkingMsg = addChatMessage('thinking', '');
+
+    API.chat(text, agent)
+      .then(function(data) {
+        removeChatMessage(thinkingMsg);
+        if (data.response) {
+          addChatMessage('assistant', data.response);
+          state.messages.push({ role: 'assistant', content: data.response });
+        }
+        setChatStatus('');
+      })
+      .catch(function(err) {
+        removeChatMessage(thinkingMsg);
+        var errMsg = (err && err.error) || (err && err.message) || 'Request failed';
+        addChatMessage('system', 'Error: ' + errMsg);
+        setChatStatus('');
+      })
+      .finally(function() {
+        state.chatBusy = false;
+        updateSendButton();
+      });
+  }
+
+  function clearChat() {
+    var agent = $('#chat-agent').value;
+    API.clearSession(agent)
+      .then(function() {
+        $('#chat-messages').innerHTML = '';
+        state.messages = [];
+        addChatMessage('system', 'Session cleared');
+      })
+      .catch(function(err) {
+        addChatMessage('system', 'Failed to clear: ' + ((err && err.error) || 'unknown error'));
+      });
+  }
+
+  function setChatStatus(text) {
+    var el = $('#chat-status');
+    if (el) el.textContent = text;
+  }
+
+  function updateSendButton() {
+    var btn = $('#chat-send');
+    var input = $('#chat-input');
+    if (btn) btn.disabled = !input.value.trim() || state.chatBusy;
+  }
+
+  // ---- Status Tab ----
+  function loadStatus() {
+    API.getStatus()
+      .then(function(data) {
+        state.status = data;
+        setConnected(true);
+        renderStatusGrid(data);
+        renderEngineGrid(data);
+        renderActivityFeed(data);
+      })
+      .catch(function() {
+        setConnected(false);
+        var grid = $('#status-grid');
+        if (grid) grid.innerHTML = '<div class="empty-state">Cannot connect to gateway</div>';
+      });
+  }
+
+  function renderStatusGrid(data) {
+    var grid = $('#status-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    var uptimeMs = Date.now() - state.startTime;
+    var uptimeStr = formatDuration(uptimeMs);
+
+    var isRunning = data.gateway && data.gateway.running;
+    var cards = [
+      { label: 'Status', value: data.status || 'unknown', cls: data.status === 'ok' ? 'ok' : 'error' },
+      { label: 'Gateway', value: isRunning ? 'Running' : 'Stopped', cls: isRunning ? 'ok' : 'error' },
+      { label: 'Version', value: data.version || '-' },
+      { label: 'Sessions', value: String(data.sessions || 0) },
+      { label: 'Uptime', value: uptimeStr },
+      { label: 'PID', value: (data.gateway && data.gateway.pid) || '-' }
+    ];
+
+    cards.forEach(function(c) {
+      var card = el('div', { className: 'status-card' }, [
+        el('div', { className: 'label', textContent: c.label }),
+        el('div', { className: 'value' + (c.cls ? ' ' + c.cls : ''), textContent: c.value })
+      ]);
+      grid.appendChild(card);
+    });
+  }
+
+  function renderEngineGrid(data) {
+    var grid = $('#engine-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    var cards = [
+      { label: 'Model', value: data.model || '-' },
+      { label: 'Provider', value: data.provider || '-' },
+      { label: 'Channels', value: (data.channels && data.channels.length) ? data.channels.join(', ') : 'none' }
+    ];
+
+    cards.forEach(function(c) {
+      grid.appendChild(el('div', { className: 'status-card' }, [
+        el('div', { className: 'label', textContent: c.label }),
+        el('div', { className: 'value', textContent: c.value })
+      ]));
+    });
+  }
+
+  function renderActivityFeed(data) {
+    var feed = $('#activity-feed');
+    if (!feed) return;
+    feed.innerHTML = '';
+
+    var items = [];
+    if (data.status === 'ok') {
+      items.push({ time: new Date().toLocaleTimeString(), text: 'Gateway status check: OK' });
+    }
+    if (data.sessions > 0) {
+      items.push({ time: new Date().toLocaleTimeString(), text: data.sessions + ' active session(s)' });
+    }
+    if (data.gateway && data.gateway.pid) {
+      items.push({ time: new Date().toLocaleTimeString(), text: 'Gateway PID: ' + data.gateway.pid });
+    }
+
+    if (items.length === 0) {
+      feed.innerHTML = '<div class="empty-state">No recent activity</div>';
+      return;
+    }
+
+    items.forEach(function(item) {
+      feed.appendChild(el('div', { className: 'activity-item' }, [
+        el('span', { className: 'time', textContent: item.time }),
+        el('span', { className: 'text', textContent: item.text })
+      ]));
+    });
+  }
+
+  function formatDuration(ms) {
+    var s = Math.floor(ms / 1000);
+    var m = Math.floor(s / 60); s = s % 60;
+    var h = Math.floor(m / 60); m = m % 60;
+    if (h > 0) return h + 'h ' + m + 'm';
+    if (m > 0) return m + 'm ' + s + 's';
+    return s + 's';
+  }
+
+  // ---- Agents Tab ----
+  function loadAgents() {
+    API.getConfig()
+      .then(function(config) {
+        state.config = config;
+        var agents = (config && config.agents) || {};
+        renderAgentsList(agents);
+        populateAgentSelector(agents);
+      })
+      .catch(function() {
+        var container = $('#agents-list');
+        if (container) container.innerHTML = '<div class="empty-state">Failed to load agent configuration</div>';
+      });
+  }
+
+  function renderAgentsList(agents) {
+    var container = $('#agents-list');
+    if (!container) return;
+    container.innerHTML = '';
+
+    var defaults = agents.defaults || {};
+    var agentKeys = Object.keys(agents).filter(function(k) { return k !== 'defaults'; });
+
+    if (agentKeys.length === 0 && !defaults.model) {
+      container.innerHTML = '<div class="empty-state">No agents configured</div>';
+      return;
+    }
+
+    // Show defaults as "main" agent
+    if (defaults.model || Object.keys(defaults).length > 0) {
+      renderAgentCard(container, 'main (defaults)', defaults, true);
+    }
+
+    agentKeys.forEach(function(key) {
+      var agentConf = agents[key];
+      if (typeof agentConf === 'object' && agentConf !== null) {
+        renderAgentCard(container, key, agentConf, false);
+      }
+    });
+  }
+
+  function renderAgentCard(container, name, conf, isPrimary) {
+    var card = el('div', { className: 'agent-card' });
+
+    var badge = el('span', {
+      className: 'agent-card-badge ' + (isPrimary ? 'primary' : 'secondary'),
+      textContent: isPrimary ? 'default' : 'agent'
+    });
+    var chevron = el('span', { textContent: '+', className: 'agent-card-badge secondary' });
+
+    var header = el('div', { className: 'agent-card-header' }, [
+      el('span', { className: 'agent-card-name', textContent: name }),
+      el('span', {}, [badge, chevron])
+    ]);
+
+    var body = el('div', { className: 'agent-card-body' });
+    var detailGrid = el('div', { className: 'agent-detail-grid' });
+
+    var details = [
+      { label: 'Model', value: conf.model || '(inherit defaults)' },
+      { label: 'Engine', value: conf.engine || '(auto-detect)' },
+      { label: 'Max Turns', value: conf.maxTurns != null ? String(conf.maxTurns) : '(default)' },
+      { label: 'Temperature', value: conf.temperature != null ? String(conf.temperature) : '(default)' }
+    ];
+
+    if (conf.tools) {
+      var toolsProfile = conf.tools.profile || '(none)';
+      details.push({ label: 'Tools Profile', value: toolsProfile });
+    }
+    if (conf.systemPrompt) {
+      var promptPreview = conf.systemPrompt;
+      if (promptPreview.length > 80) promptPreview = promptPreview.substring(0, 80) + '...';
+      details.push({ label: 'System Prompt', value: promptPreview });
+    }
+
+    details.forEach(function(d) {
+      detailGrid.appendChild(el('div', { className: 'agent-detail' }, [
+        el('div', { className: 'label', textContent: d.label }),
+        el('div', { className: 'value', textContent: d.value })
+      ]));
+    });
+
+    body.appendChild(detailGrid);
+    card.appendChild(header);
+    card.appendChild(body);
+    container.appendChild(card);
+
+    header.addEventListener('click', function() {
+      var isOpen = body.classList.contains('open');
+      body.classList.toggle('open');
+      chevron.textContent = isOpen ? '+' : '-';
+    });
+  }
+
+  function populateAgentSelector(agents) {
+    var sel = $('#chat-agent');
+    if (!sel) return;
+    var current = sel.value;
+    sel.innerHTML = '';
+
+    sel.appendChild(el('option', { value: 'main', textContent: 'main' }));
+
+    var agentKeys = Object.keys(agents).filter(function(k) {
+      return k !== 'defaults' && k !== 'main';
+    });
+    agentKeys.forEach(function(k) {
+      sel.appendChild(el('option', { value: k, textContent: k }));
+    });
+
+    if (current) sel.value = current;
+  }
+
+  // ---- Sessions Tab ----
+  function loadSessions() {
+    API.getSessions()
+      .then(function(data) {
+        state.sessions = (data && data.sessions) || [];
+        renderSessionsList(state.sessions);
+        populateSessionSelector(state.sessions);
+      })
+      .catch(function() {
+        var container = $('#sessions-list');
+        if (container) container.innerHTML = '<div class="empty-state">Failed to load sessions</div>';
+      });
+  }
+
+  function renderSessionsList(sessions) {
+    var container = $('#sessions-list');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!sessions.length) {
+      container.innerHTML = '<div class="empty-state">No active sessions</div>';
+      return;
+    }
+
+    var table = el('table', { className: 'sessions-table' });
+    var thead = el('thead', {}, [
+      el('tr', {}, [
+        el('th', { textContent: 'Session Name' }),
+        el('th', { textContent: 'Messages' }),
+        el('th', { textContent: 'Size' }),
+        el('th', { textContent: 'Actions' })
+      ])
+    ]);
+    table.appendChild(thead);
+
+    var tbody = el('tbody');
+    sessions.forEach(function(s) {
+      var sizeStr = s.size > 1024 ? (s.size / 1024).toFixed(1) + ' KB' : s.size + ' B';
+
+      // Parse name to extract agent/channel/sender
+      var parts = (s.name || '').split('_');
+
+      var viewBtn = el('button', {
+        className: 'btn btn-sm',
+        textContent: 'View in Chat',
+        onClick: function() {
+          window.location.hash = '#chat';
+          hashRoute();
+        }
+      });
+
+      var row = el('tr', {}, [
+        el('td', { className: 'name-cell', textContent: s.name }),
+        el('td', { textContent: String(s.messages) }),
+        el('td', { textContent: sizeStr }),
+        el('td', { className: 'actions-cell' }, [viewBtn])
+      ]);
+      tbody.appendChild(row);
+    });
+
+    table.appendChild(tbody);
+    container.appendChild(table);
+  }
+
+  function populateSessionSelector(sessions) {
+    var sel = $('#chat-session');
+    if (!sel) return;
+    var current = sel.value;
+    sel.innerHTML = '';
+    sel.appendChild(el('option', { value: '', textContent: 'default' }));
+
+    sessions.forEach(function(s) {
+      sel.appendChild(el('option', { value: s.name, textContent: s.name }));
+    });
+
+    if (current) sel.value = current;
+  }
+
+  // ---- Config Tab ----
+  function loadConfig() {
+    API.getConfig()
+      .then(function(data) {
+        state.config = data;
+        renderConfig(data);
+      })
+      .catch(function(err) {
+        var container = $('#config-json');
+        if (container) container.textContent = 'Failed to load config: ' + ((err && err.error) || 'unknown');
+      });
+  }
+
+  function renderConfig(data) {
+    var container = $('#config-json');
+    if (!container) return;
+
+    try {
+      var formatted = JSON.stringify(data, null, 2);
+      container.innerHTML = highlightJson(escapeHtml(formatted));
+    } catch (e) {
+      container.textContent = 'Error formatting config';
+    }
+
+    var pathEl = $('#config-path');
+    if (pathEl) {
+      pathEl.textContent = 'Config file: ~/.bashclaw/bashclaw.json';
+    }
+  }
+
+  // ---- Logs Tab ----
+  function loadLogs() {
+    // Logs are fetched from the status API since there is no dedicated logs endpoint.
+    // We generate synthetic log entries based on status information.
+    // In a production setup this would read from the actual log file via an API endpoint.
+    API.getStatus()
+      .then(function(data) {
+        var entries = generateLogEntries(data);
+        state.logs = entries;
+        renderLogs(entries);
+      })
+      .catch(function() {
+        var container = $('#log-entries');
+        if (container) container.innerHTML = '<div class="empty-state">Cannot fetch log data</div>';
+      });
+
+    if (state.logsAutoRefresh) {
+      startPolling('logs', loadLogs, 3000);
+    }
+  }
+
+  function generateLogEntries(statusData) {
+    var entries = [];
+    var now = new Date();
+
+    if (statusData.status === 'ok') {
+      entries.push({ ts: now.toISOString(), level: 'info', text: 'Gateway status: OK' });
+    } else {
+      entries.push({ ts: now.toISOString(), level: 'error', text: 'Gateway status: ' + (statusData.status || 'unknown') });
+    }
+
+    if (statusData.gateway && statusData.gateway.running) {
+      entries.push({ ts: now.toISOString(), level: 'info', text: 'Gateway process running (PID: ' + (statusData.gateway.pid || '?') + ')' });
+    } else {
+      entries.push({ ts: now.toISOString(), level: 'warn', text: 'Gateway process not detected' });
+    }
+
+    entries.push({ ts: now.toISOString(), level: 'info', text: 'Active sessions: ' + (statusData.sessions || 0) });
+    entries.push({ ts: now.toISOString(), level: 'debug', text: 'Model: ' + (statusData.model || 'unknown') + ', Provider: ' + (statusData.provider || 'unknown') });
+    entries.push({ ts: now.toISOString(), level: 'debug', text: 'Version: ' + (statusData.version || 'unknown') });
+
+    if (statusData.channels && statusData.channels.length > 0) {
+      entries.push({ ts: now.toISOString(), level: 'info', text: 'Channels configured: ' + statusData.channels.join(', ') });
+    }
+
+    return entries;
+  }
+
+  function renderLogs(entries) {
+    var container = $('#log-entries');
+    if (!container) return;
+    container.innerHTML = '';
+
+    var filtered = entries.filter(function(e) {
+      return state.logLevels[e.level];
+    });
+
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="empty-state">No log entries match current filter</div>';
+      return;
+    }
+
+    filtered.forEach(function(entry) {
+      var tsStr = '';
+      try {
+        var d = new Date(entry.ts);
+        tsStr = d.toLocaleTimeString();
+      } catch(e) {
+        tsStr = entry.ts || '';
+      }
+
+      container.appendChild(el('div', { className: 'log-entry' }, [
+        el('span', { className: 'log-ts', textContent: tsStr }),
+        el('span', { className: 'log-level ' + entry.level, textContent: entry.level }),
+        el('span', { className: 'log-text', textContent: entry.text })
+      ]));
+    });
+  }
+
+  // ---- Initialize ----
+  function init() {
+    applyTheme(state.theme);
+
+    // Theme toggle
+    $('#theme-toggle').addEventListener('click', cycleTheme);
+
+    // Tab navigation
+    $$('.nav-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        switchTab(tab.getAttribute('data-tab'));
+      });
+    });
+
+    // Hash routing
+    window.addEventListener('hashchange', hashRoute);
+
+    // Chat input
+    var chatInput = $('#chat-input');
+    chatInput.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+      updateSendButton();
+    });
+    chatInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChat();
+      }
+    });
+
+    $('#chat-send').addEventListener('click', sendChat);
+    $('#chat-clear').addEventListener('click', clearChat);
+
+    // Status refresh button
+    $('#status-refresh').addEventListener('click', loadStatus);
+    $('#agents-refresh').addEventListener('click', loadAgents);
+    $('#sessions-refresh').addEventListener('click', loadSessions);
+    $('#config-refresh').addEventListener('click', loadConfig);
+
+    // Log level filter buttons
+    $$('.filter-btn[data-level]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var level = btn.getAttribute('data-level');
+        state.logLevels[level] = !state.logLevels[level];
+        btn.classList.toggle('active', state.logLevels[level]);
+        renderLogs(state.logs);
+      });
+    });
+
+    // Log auto-refresh toggle
+    var autoRefresh = $('#logs-auto-refresh');
+    if (autoRefresh) {
+      autoRefresh.addEventListener('change', function() {
+        state.logsAutoRefresh = autoRefresh.checked;
+        if (state.logsAutoRefresh && state.currentTab === 'logs') {
+          startPolling('logs', loadLogs, 3000);
+        } else {
+          stopPolling('logs');
+        }
+      });
+    }
+
+    // Initial connection check and version load
+    API.getStatus()
+      .then(function(data) {
+        setConnected(true);
+        var ver = $('#nav-version');
+        if (ver && data.version) ver.textContent = 'v' + data.version;
+
+        // Pre-load agents for chat selector
+        if (data) {
+          state.status = data;
+        }
+      })
+      .catch(function() {
+        setConnected(false);
+        addChatMessage('system', 'Cannot connect to gateway. Is the BashClaw gateway running?');
+      });
+
+    // Load agents for the chat agent selector
+    API.getConfig()
+      .then(function(config) {
+        state.config = config;
+        var agents = (config && config.agents) || {};
+        populateAgentSelector(agents);
+      })
+      .catch(function() {});
+
+    // Load sessions for the chat session selector
+    API.getSessions()
+      .then(function(data) {
+        state.sessions = (data && data.sessions) || [];
+        populateSessionSelector(state.sessions);
+      })
+      .catch(function() {});
+
+    // Apply initial route
+    hashRoute();
+  }
+
+  // Boot
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+})();
+</script>
 </body>
 </html>

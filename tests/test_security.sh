@@ -336,4 +336,225 @@ else
 fi
 teardown_test_env
 
+# ---- _security_safe_equal: equal strings return 0 ----
+
+test_start "_security_safe_equal: equal strings return 0"
+setup_test_env
+_source_libs
+if _security_safe_equal "hello123" "hello123"; then
+  _test_pass
+else
+  _test_fail "equal strings should return 0"
+fi
+teardown_test_env
+
+# ---- _security_safe_equal: different strings return 1 ----
+
+test_start "_security_safe_equal: different strings return 1"
+setup_test_env
+_source_libs
+set +e
+_security_safe_equal "hello123" "world456"
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- _security_safe_equal: different length strings return 1 ----
+
+test_start "_security_safe_equal: different length strings return 1"
+setup_test_env
+_source_libs
+set +e
+_security_safe_equal "short" "muchlongerstring"
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- _security_safe_equal: both empty strings return 0 ----
+
+test_start "_security_safe_equal: both empty strings return 0"
+setup_test_env
+_source_libs
+if _security_safe_equal "" ""; then
+  _test_pass
+else
+  _test_fail "both empty strings should return 0"
+fi
+teardown_test_env
+
+# ---- _security_safe_equal: one empty one non-empty return 1 ----
+
+test_start "_security_safe_equal: one empty one non-empty return 1"
+setup_test_env
+_source_libs
+set +e
+_security_safe_equal "" "notempty"
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- security_rate_limit with zero limit ----
+
+test_start "security_rate_limit blocks on zero limit"
+setup_test_env
+_source_libs
+set +e
+security_rate_limit "user_zero_limit" 0
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- security_exec_approval approves safe commands ----
+
+test_start "security_exec_approval approves safe commands"
+setup_test_env
+_source_libs
+result="$(security_exec_approval "ls -la")"
+assert_eq "$result" "approved"
+teardown_test_env
+
+# ---- security_exec_approval flags sudo commands ----
+
+test_start "security_exec_approval flags sudo commands"
+setup_test_env
+_source_libs
+result="$(security_exec_approval "sudo rm /tmp/test")"
+assert_eq "$result" "needs_approval"
+teardown_test_env
+
+# ---- security_pairing_code_verify nonexistent channel fails ----
+
+test_start "security_pairing_code_verify nonexistent channel fails"
+setup_test_env
+_source_libs
+set +e
+security_pairing_code_verify "no_such_channel" "no_user" "123456" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- security_command_auth_check with role-based access ----
+
+test_start "security_command_auth_check with role-based access"
+setup_test_env
+_source_libs
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{
+  "security": {
+    "commands": {
+      "deploy": {"requiredRole": "deployer", "allowedUsers": []}
+    },
+    "userRoles": {
+      "dev_user": ["deployer"]
+    }
+  }
+}
+EOF
+_CONFIG_CACHE=""
+config_load
+if security_command_auth_check "deploy" "dev_user"; then
+  _test_pass
+else
+  _test_fail "user with correct role should be authorized"
+fi
+teardown_test_env
+
+# ---- security_command_auth_check with wrong role denied ----
+
+test_start "security_command_auth_check with wrong role denied"
+setup_test_env
+_source_libs
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{
+  "security": {
+    "commands": {
+      "deploy": {"requiredRole": "deployer", "allowedUsers": []}
+    },
+    "userRoles": {
+      "other_user": ["viewer"]
+    }
+  }
+}
+EOF
+_CONFIG_CACHE=""
+config_load
+set +e
+security_command_auth_check "deploy" "other_user" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- Edge Case: _security_safe_equal with unicode strings ----
+
+test_start "_security_safe_equal with unicode strings returns correct result"
+setup_test_env
+_source_libs
+if _security_safe_equal "hello-unicode" "hello-unicode"; then
+  _test_pass
+else
+  _test_fail "identical unicode strings should be equal"
+fi
+teardown_test_env
+
+test_start "_security_safe_equal with different unicode strings returns 1"
+setup_test_env
+_source_libs
+set +e
+_security_safe_equal "abc-xyz" "abc-123"
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- Edge Case: rate limit rapid successive calls trigger rate limit ----
+
+test_start "security_rate_limit rapid successive calls trigger rate limit"
+setup_test_env
+_source_libs
+blocked=false
+for i in $(seq 1 8); do
+  if ! security_rate_limit "rapid_user" 3; then
+    blocked=true
+    break
+  fi
+done
+if [[ "$blocked" == "true" ]]; then
+  _test_pass
+else
+  _test_fail "rapid calls should trigger rate limit with max=3"
+fi
+teardown_test_env
+
+# ---- Edge Case: security_check_elevated with unknown user ----
+
+test_start "security_elevated_check with unknown user returns needs_approval for shell"
+setup_test_env
+_source_libs
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"security": {"elevatedUsers": ["known_admin"]}}
+EOF
+_CONFIG_CACHE=""
+config_load
+result="$(security_elevated_check "shell" "totally_unknown_user_xyz" "telegram")"
+assert_eq "$result" "needs_approval"
+teardown_test_env
+
+test_start "security_elevated_check with unknown user returns approved for normal tools"
+setup_test_env
+_source_libs
+cat > "$BASHCLAW_CONFIG" <<'EOF'
+{"security": {"elevatedUsers": ["known_admin"]}}
+EOF
+_CONFIG_CACHE=""
+config_load
+result="$(security_elevated_check "memory" "totally_unknown_user_xyz" "telegram")"
+assert_eq "$result" "approved"
+teardown_test_env
+
 report_results

@@ -120,12 +120,83 @@ session_key() {
   fi
 }
 
+# Ensure a JSONL session header exists as the first line of the file.
+# Creates the header if the file is empty or does not exist.
+session_ensure_header() {
+  local file="$1"
+
+  # If the file exists and is non-empty, check if it already has a header
+  if [[ -f "$file" && -s "$file" ]]; then
+    local first_line
+    first_line="$(head -n 1 "$file")"
+    if printf '%s' "$first_line" | grep -q '"type":"session"' 2>/dev/null; then
+      return 0
+    fi
+    # File has content but no header; prepend one
+    require_command jq "session_ensure_header requires jq"
+    local sid
+    sid="$(uuid_generate)"
+    local ts
+    ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    local header
+    header="$(jq -nc \
+      --arg sid "$sid" \
+      --arg ts "$ts" \
+      '{type:"session",version:"1",id:$sid,timestamp:$ts,engine:"bashclaw"}')"
+    local tmp
+    tmp="$(tmpfile "session_header")"
+    printf '%s\n' "$header" > "$tmp"
+    cat "$file" >> "$tmp"
+    mv "$tmp" "$file"
+    return 0
+  fi
+
+  # File is empty or does not exist; create with header
+  require_command jq "session_ensure_header requires jq"
+  ensure_dir "$(dirname "$file")"
+  local sid
+  sid="$(uuid_generate)"
+  local ts
+  ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  local header
+  header="$(jq -nc \
+    --arg sid "$sid" \
+    --arg ts "$ts" \
+    '{type:"session",version:"1",id:$sid,timestamp:$ts,engine:"bashclaw"}')"
+  printf '%s\n' "$header" > "$file"
+}
+
+_session_lock() {
+  local lockfile="${1}.lock"
+  local attempts=0
+  while ! mkdir "$lockfile" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    if (( attempts > 50 )); then
+      rm -rf "$lockfile" 2>/dev/null || true
+      mkdir "$lockfile" 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+  done
+}
+
+_session_unlock() {
+  local lockfile="${1}.lock"
+  rmdir "$lockfile" 2>/dev/null || true
+}
+
 session_append() {
   local file="$1"
   local role="$2"
   local content="$3"
 
   require_command jq "session_append requires jq"
+
+  _session_lock "$file"
+
+  # Ensure the session header exists before appending
+  session_ensure_header "$file"
+
   local ts
   ts="$(timestamp_ms)"
   local line
@@ -134,6 +205,8 @@ session_append() {
   printf '%s\n' "$line" >> "$file"
 
   session_meta_update "$file" "updatedAt" "\"${ts}\""
+
+  _session_unlock "$file"
 }
 
 session_append_tool_call() {
@@ -184,10 +257,12 @@ session_load() {
   fi
 
   require_command jq "session_load requires jq"
+
+  # Filter out the session header line (type=="session")
   if (( max_lines > 0 )); then
-    tail -n "$max_lines" "$file" | jq -s '.'
+    tail -n "$max_lines" "$file" | jq -s '[.[] | select(.type != "session")]'
   else
-    jq -s '.' < "$file"
+    jq -s '[.[] | select(.type != "session")]' < "$file"
   fi
 }
 
@@ -203,9 +278,9 @@ session_load_as_messages() {
   require_command jq "session_load_as_messages requires jq"
   local raw
   if (( max_lines > 0 )); then
-    raw="$(tail -n "$max_lines" "$file" | jq -s '.')"
+    raw="$(tail -n "$max_lines" "$file" | jq -s '[.[] | select(.type != "session")]')"
   else
-    raw="$(jq -s '.' < "$file")"
+    raw="$(jq -s '[.[] | select(.type != "session")]' < "$file")"
   fi
 
   printf '%s' "$raw" | jq '[.[] | {role: .role, content: .content}]'
@@ -258,16 +333,22 @@ session_list() {
   fi
 
   require_command jq "session_list requires jq"
-  local result="[]"
+  local ndjson=""
   local f
   while IFS= read -r -d '' f; do
     local relative="${f#${base_dir}/}"
     local count
     count="$(wc -l < "$f" | tr -d ' ')"
-    result="$(printf '%s' "$result" | jq --arg p "$relative" --arg c "$count" \
-      '. + [{"path": $p, "count": ($c | tonumber)}]')"
+    ndjson="${ndjson}$(jq -nc --arg p "$relative" --argjson c "$count" \
+      '{"path": $p, "count": $c}')"$'\n'
   done < <(find "$base_dir" -name '*.jsonl' -print0 2>/dev/null)
 
+  local result
+  if [[ -n "$ndjson" ]]; then
+    result="$(printf '%s' "$ndjson" | jq -s '.')"
+  else
+    result="[]"
+  fi
   printf '%s' "$result"
 }
 
@@ -303,6 +384,10 @@ session_check_idle_reset() {
   if (( diff_minutes >= idle_minutes )); then
     session_clear "$file"
     log_info "Session idle-reset after ${diff_minutes}m: $file"
+    # Fire session_end hook event
+    if declare -f hooks_run &>/dev/null; then
+      hooks_run "session_end" "{\"file\":\"$file\",\"reason\":\"idle_timeout\",\"idle_minutes\":$diff_minutes}" 2>/dev/null || true
+    fi
     return 0
   fi
   return 1
@@ -323,7 +408,7 @@ session_export() {
       ;;
     text)
       require_command jq "session_export text requires jq"
-      jq -r '"\(.role // "unknown"): \(.content // "")"' < "$file"
+      jq -r 'select(.type != "session") | "\(.role // "unknown"): \(.content // "")"' < "$file"
       ;;
     *)
       log_error "Unknown export format: $format (use json or text)"
@@ -338,7 +423,17 @@ session_count() {
     printf '0'
     return 0
   fi
-  wc -l < "$file" | tr -d ' '
+  local total
+  total="$(wc -l < "$file" | tr -d ' ')"
+  # Subtract the header line if present
+  if [[ "$total" -gt 0 ]]; then
+    local first_line
+    first_line="$(head -n 1 "$file")"
+    if printf '%s' "$first_line" | grep -q '"type":"session"' 2>/dev/null; then
+      total=$((total - 1))
+    fi
+  fi
+  printf '%d' "$total"
 }
 
 session_last_role() {
@@ -451,6 +546,58 @@ session_meta_get() {
   fi
 }
 
+# ---- Token Estimation ----
+
+# Estimate the number of tokens in a session file.
+# Uses chars/4 as a rough approximation.
+session_estimate_tokens() {
+  local session_file="$1"
+
+  if [[ ! -f "$session_file" ]]; then
+    printf '0'
+    return
+  fi
+
+  local char_count
+  char_count="$(wc -c < "$session_file" | tr -d ' ')"
+  printf '%d' $((char_count / 4))
+}
+
+# Check whether auto-compaction should be triggered.
+# Returns 0 if compaction needed, 1 if not.
+session_check_compaction() {
+  local session_file="$1"
+  local agent_id="${2:-main}"
+
+  if [[ ! -f "$session_file" ]]; then
+    return 1
+  fi
+
+  require_command jq "session_check_compaction requires jq"
+
+  local context_tokens
+  context_tokens="$(config_agent_get "$agent_id" "contextTokens" "200000")"
+
+  local threshold
+  threshold="$(config_agent_get_raw "$agent_id" '.compaction.threshold' 2>/dev/null)"
+  if [[ -z "$threshold" || "$threshold" == "null" ]]; then
+    threshold="0.8"
+  fi
+
+  local estimated
+  estimated="$(session_estimate_tokens "$session_file")"
+
+  local limit
+  limit="$(printf '%s' "" | jq -n --argjson ct "$context_tokens" --argjson th "$threshold" \
+    '($ct * $th) | floor')"
+
+  if (( estimated > limit )); then
+    return 0
+  fi
+
+  return 1
+}
+
 # ---- Auto-Compaction ----
 
 # Detect context overflow from an API error response.
@@ -490,12 +637,14 @@ session_detect_overflow() {
   return 1
 }
 
-# Compact a session by summarizing old history via LLM.
-# Keeps the summary + recent messages.
+# Compact a session by summarizing old history via LLM or truncating.
+# mode: "summary" (default) uses LLM to summarize, "truncate" keeps recent messages.
+# Keeps the summary + recent messages within the reserve token budget.
 session_compact() {
   local session_file="$1"
   local model="$2"
   local api_key="$3"
+  local mode="${4:-summary}"
 
   if [[ ! -f "$session_file" ]]; then
     return 1
@@ -510,6 +659,58 @@ session_compact() {
     return 1
   fi
 
+  # Determine how many tokens to keep after compaction
+  local reserve_tokens
+  reserve_tokens="$(config_get_raw '.agents.defaults.compaction.reserveTokens // 50000' 2>/dev/null)"
+  if [[ -z "$reserve_tokens" || "$reserve_tokens" == "null" ]]; then
+    reserve_tokens=50000
+  fi
+
+  if [[ "$mode" == "truncate" ]]; then
+    # Truncate mode: keep only the last N messages that fit within the reserve budget
+    local current_chars
+    current_chars="$(wc -c < "$session_file" | tr -d ' ')"
+    local target_chars=$((reserve_tokens * 4))
+
+    if (( current_chars <= target_chars )); then
+      log_debug "Session within reserve budget, no truncation needed"
+      return 1
+    fi
+
+    # Binary search for the right number of tail lines
+    local keep_lines=$((total_lines / 2))
+    local tmp
+    tmp="$(tmpfile "session_trunc_probe")"
+    while (( keep_lines > 6 )); do
+      tail -n "$keep_lines" "$session_file" > "$tmp"
+      local probe_chars
+      probe_chars="$(wc -c < "$tmp" | tr -d ' ')"
+      if (( probe_chars <= target_chars )); then
+        break
+      fi
+      keep_lines=$((keep_lines / 2))
+    done
+    rm -f "$tmp"
+
+    if (( keep_lines < 6 )); then
+      keep_lines=6
+    fi
+
+    local tmp2
+    tmp2="$(tmpfile "session_compact_truncate")"
+    tail -n "$keep_lines" "$session_file" > "$tmp2"
+    mv "$tmp2" "$session_file"
+
+    local prev_count
+    prev_count="$(session_meta_get "$session_file" "compactionCount" "0")"
+    local new_count=$((prev_count + 1))
+    session_meta_update "$session_file" "compactionCount" "$new_count"
+
+    log_info "Session truncated to $keep_lines lines (compaction #${new_count}, mode=truncate)"
+    return 0
+  fi
+
+  # Summary mode (default): use LLM to summarize old messages
   # Keep the last 20% of messages (at least 6)
   local keep_recent=$((total_lines / 5))
   if (( keep_recent < 6 )); then
@@ -541,11 +742,13 @@ session_compact() {
     [{role: "user", content: ($prompt + "\n\n" + ($msgs | map(.role + ": " + .content) | join("\n")))}]
   ')"
 
-  # Call the API for summarization
+  # Call the API for summarization using the provider abstraction
   local provider
   provider="$(agent_resolve_provider "$model")"
   local summary_response
-  case "$provider" in
+  local api_format
+  api_format="$(_provider_api_format "$provider")"
+  case "$api_format" in
     anthropic)
       summary_response="$(agent_call_anthropic "$model" "You are a conversation summarizer." "$compact_messages" 2048 0.3 "" 2>/dev/null)" || true
       ;;
@@ -555,11 +758,8 @@ session_compact() {
     google)
       summary_response="$(agent_call_google "$model" "You are a conversation summarizer." "$compact_messages" 2048 0.3 "" 2>/dev/null)" || true
       ;;
-    openrouter)
-      summary_response="$(agent_call_openrouter "$model" "You are a conversation summarizer." "$compact_messages" 2048 0.3 "" 2>/dev/null)" || true
-      ;;
     *)
-      log_error "Unsupported provider for compaction: $provider"
+      log_error "Unsupported API format for compaction: $api_format (provider=$provider)"
       return 1
       ;;
   esac
@@ -597,6 +797,6 @@ session_compact() {
   local new_count=$((prev_count + 1))
   session_meta_update "$session_file" "compactionCount" "$new_count"
 
-  log_info "Session compacted: kept $keep_recent recent + summary (compaction #${new_count})"
+  log_info "Session compacted: kept $keep_recent recent + summary (compaction #${new_count}, mode=summary)"
   return 0
 }

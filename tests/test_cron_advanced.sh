@@ -214,4 +214,214 @@ cron_check_stuck
 assert_file_not_exists "${run_dir}/stuck_job_abc.run"
 teardown_test_env
 
+# ---- cron_remove nonexistent job does not error ----
+
+test_start "cron_remove nonexistent job keeps store intact"
+setup_test_env
+_source_libs
+cron_add "existing" '{"kind":"every","everyMs":60000}' "Keep" "main"
+cron_remove "nonexistent_xyz"
+result="$(cron_store_load)"
+count="$(printf '%s' "$result" | jq '.jobs | length')"
+assert_eq "$count" "1"
+teardown_test_env
+
+# ---- cron_parse_schedule with invalid JSON falls back to cron ----
+
+test_start "cron_parse_schedule with invalid JSON falls back to cron"
+setup_test_env
+_source_libs
+kind="$(cron_parse_schedule 'not-json-at-all')"
+assert_eq "$kind" "cron"
+teardown_test_env
+
+# ---- cron_next_run for "every" with zero interval returns error ----
+
+test_start "cron_next_run for every with zero interval returns 0"
+setup_test_env
+_source_libs
+set +e
+result="$(cron_next_run '{"kind":"every","everyMs":0}' "0")"
+rc=$?
+set -e
+assert_eq "$result" "0"
+teardown_test_env
+
+# ---- cron_next_run for "at" with missing timestamp ----
+
+test_start "cron_next_run for at with missing timestamp returns 0"
+setup_test_env
+_source_libs
+set +e
+result="$(cron_next_run '{"kind":"at"}' "0")"
+rc=$?
+set -e
+assert_eq "$result" "0"
+teardown_test_env
+
+# ---- _cron_iso_to_epoch with empty string returns 0 ----
+
+test_start "_cron_iso_to_epoch with empty string returns 0"
+setup_test_env
+_source_libs
+set +e
+result="$(_cron_iso_to_epoch "")"
+set -e
+assert_eq "$result" "0"
+teardown_test_env
+
+# ---- _cron_next_match with malformed expression ----
+
+test_start "_cron_next_match with incomplete expression returns 0"
+setup_test_env
+_source_libs
+set +e
+result="$(_cron_next_match "* *" "")"
+set -e
+assert_eq "$result" "0"
+teardown_test_env
+
+# ---- cron_add duplicate job IDs both persist ----
+
+test_start "cron_add allows duplicate job IDs"
+setup_test_env
+_source_libs
+cron_add "dup" '{"kind":"every","everyMs":60000}' "First" "main"
+cron_add "dup" '{"kind":"every","everyMs":120000}' "Second" "main"
+result="$(cron_store_load)"
+count="$(printf '%s' "$result" | jq '[.jobs[] | select(.id == "dup")] | length')"
+assert_eq "$count" "2"
+teardown_test_env
+
+# ---- cron_log_run creates JSONL entry ----
+
+test_start "cron_log_run creates JSONL entry"
+setup_test_env
+_source_libs
+cron_log_run "test_job_1" "success" "" 1234 "all good"
+log_file="${BASHCLAW_STATE_DIR}/cron/runs/test_job_1.jsonl"
+assert_file_exists "$log_file"
+line="$(tail -n 1 "$log_file")"
+assert_json_valid "$line"
+status_val="$(printf '%s' "$line" | jq -r '.status')"
+assert_eq "$status_val" "success"
+dur_val="$(printf '%s' "$line" | jq -r '.duration_ms')"
+assert_eq "$dur_val" "1234"
+summary_val="$(printf '%s' "$line" | jq -r '.summary')"
+assert_eq "$summary_val" "all good"
+job_id_val="$(printf '%s' "$line" | jq -r '.job_id')"
+assert_eq "$job_id_val" "test_job_1"
+teardown_test_env
+
+# ---- cron_log_run records error entries ----
+
+test_start "cron_log_run records error entries"
+setup_test_env
+_source_libs
+cron_log_run "err_job" "error" "something went wrong" 500 ""
+log_file="${BASHCLAW_STATE_DIR}/cron/runs/err_job.jsonl"
+assert_file_exists "$log_file"
+line="$(tail -n 1 "$log_file")"
+err_val="$(printf '%s' "$line" | jq -r '.error')"
+assert_eq "$err_val" "something went wrong"
+teardown_test_env
+
+# ---- cron_get_run_history returns correct entries ----
+
+test_start "cron_get_run_history returns correct entries"
+setup_test_env
+_source_libs
+cron_log_run "hist_job" "success" "" 100 "run 1"
+cron_log_run "hist_job" "success" "" 200 "run 2"
+cron_log_run "hist_job" "error" "fail" 300 ""
+result="$(cron_get_run_history "hist_job" 10)"
+assert_json_valid "$result"
+count="$(printf '%s' "$result" | jq 'length')"
+assert_eq "$count" "3"
+first_summary="$(printf '%s' "$result" | jq -r '.[0].summary')"
+assert_eq "$first_summary" "run 1"
+last_status="$(printf '%s' "$result" | jq -r '.[2].status')"
+assert_eq "$last_status" "error"
+teardown_test_env
+
+# ---- cron_get_run_history respects limit ----
+
+test_start "cron_get_run_history respects limit"
+setup_test_env
+_source_libs
+for i in $(seq 1 5); do
+  cron_log_run "limit_job" "success" "" $((i * 100)) "run $i"
+done
+result="$(cron_get_run_history "limit_job" 2)"
+assert_json_valid "$result"
+count="$(printf '%s' "$result" | jq 'length')"
+assert_eq "$count" "2"
+teardown_test_env
+
+# ---- cron_get_run_history returns empty for nonexistent job ----
+
+test_start "cron_get_run_history returns empty for nonexistent job"
+setup_test_env
+_source_libs
+result="$(cron_get_run_history "no_such_job" 10)"
+assert_eq "$result" "[]"
+teardown_test_env
+
+# ---- cron_get_run_stats calculates correctly ----
+
+test_start "cron_get_run_stats calculates correctly"
+setup_test_env
+_source_libs
+cron_log_run "stats_job" "success" "" 100 "ok"
+cron_log_run "stats_job" "success" "" 200 "ok"
+cron_log_run "stats_job" "error" "fail" 300 ""
+result="$(cron_get_run_stats "stats_job")"
+assert_json_valid "$result"
+total="$(printf '%s' "$result" | jq '.total')"
+assert_eq "$total" "3"
+success="$(printf '%s' "$result" | jq '.success')"
+assert_eq "$success" "2"
+errors="$(printf '%s' "$result" | jq '.errors')"
+assert_eq "$errors" "1"
+avg_dur="$(printf '%s' "$result" | jq '.avg_duration_ms')"
+assert_eq "$avg_dur" "200"
+teardown_test_env
+
+# ---- cron_get_run_stats returns zeros for nonexistent job ----
+
+test_start "cron_get_run_stats returns zeros for nonexistent job"
+setup_test_env
+_source_libs
+result="$(cron_get_run_stats "no_such_job")"
+assert_json_valid "$result"
+total="$(printf '%s' "$result" | jq '.total')"
+assert_eq "$total" "0"
+teardown_test_env
+
+# ---- cron_log_run rotates file when large ----
+
+test_start "cron_log_run rotates file when large"
+setup_test_env
+_source_libs
+log_file="${BASHCLAW_STATE_DIR}/cron/runs/big_job.jsonl"
+ensure_dir "$(dirname "$log_file")"
+# Create a file just over 5MB with dummy data
+padding="$(printf '%0.s.' $(seq 1 500))"
+i=0
+while (( i < 11000 )); do
+  printf '{"ts":"2025-01-01T00:00:00Z","job_id":"big_job","status":"success","error":"","duration_ms":100,"summary":"%s"}\n' "$padding" >> "$log_file"
+  i=$((i + 1))
+done
+size_before="$(wc -c < "$log_file" | tr -d ' ')"
+assert_gt "$size_before" 5242880
+# Now log a new run, which should trigger rotation
+cron_log_run "big_job" "success" "" 50 "after rotation"
+size_after="$(wc -c < "$log_file" | tr -d ' ')"
+# After rotation, file should be much smaller than before
+assert_gt "$size_before" "$size_after"
+# The new entry should be present
+last_line="$(tail -n 1 "$log_file")"
+assert_contains "$last_line" "after rotation"
+teardown_test_env
+
 report_results

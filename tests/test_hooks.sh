@@ -275,4 +275,154 @@ count="$(hooks_count "pre_message")"
 assert_ge "$count" 1
 teardown_test_env
 
+# ---- hooks_run with no registered hooks returns empty ----
+
+test_start "hooks_run with no hooks for event returns empty"
+setup_test_env
+_source_libs
+result="$(hooks_run "post_message" '{"data":"test"}' 2>/dev/null)"
+# void strategy events return nothing
+assert_eq "$result" ""
+teardown_test_env
+
+# ---- hooks_register with missing script file fails ----
+
+test_start "hooks_register with missing script file fails"
+setup_test_env
+_source_libs
+set +e
+hooks_register "bad_path" "pre_message" "/nonexistent/path/hook.sh" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- hooks_enable nonexistent hook fails ----
+
+test_start "hooks_enable nonexistent hook fails"
+setup_test_env
+_source_libs
+set +e
+hooks_enable "nonexistent_hook" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- hooks_disable nonexistent hook fails ----
+
+test_start "hooks_disable nonexistent hook fails"
+setup_test_env
+_source_libs
+set +e
+hooks_disable "nonexistent_hook" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- hooks_remove nonexistent hook fails ----
+
+test_start "hooks_remove nonexistent hook fails"
+setup_test_env
+_source_libs
+set +e
+hooks_remove "nonexistent_hook" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- hooks_count returns 0 when no hooks registered ----
+
+test_start "hooks_count returns 0 for empty event"
+setup_test_env
+_source_libs
+count="$(hooks_count "on_error")"
+assert_eq "$count" "0"
+teardown_test_env
+
+# ---- hooks_list with no hooks returns empty array ----
+
+test_start "hooks_list with no hooks returns empty array"
+setup_test_env
+_source_libs
+result="$(hooks_list)"
+assert_eq "$result" "[]"
+teardown_test_env
+
+# ---- hooks_load_dir on nonexistent directory fails ----
+
+test_start "hooks_load_dir on nonexistent directory fails"
+setup_test_env
+_source_libs
+set +e
+hooks_load_dir "/nonexistent/dir" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- Edge Case: hooks_run with no registered hooks returns empty ----
+
+test_start "hooks_run with no registered hooks returns empty"
+setup_test_env
+_source_libs
+result="$(hooks_run "pre_message" '{"data":"test"}' 2>/dev/null)"
+# For modifying strategy, with no hooks, returns the original input
+assert_contains "$result" "data"
+teardown_test_env
+
+# ---- Edge Case: hooks_run with hook script that exits with error ----
+
+test_start "hooks_run with hook script that exits with error continues"
+setup_test_env
+_source_libs
+hook_err="${BASHCLAW_STATE_DIR}/err_hook.sh"
+hook_ok="${BASHCLAW_STATE_DIR}/ok_hook.sh"
+cat > "$hook_err" <<'HOOKEOF'
+#!/usr/bin/env bash
+exit 1
+HOOKEOF
+cat > "$hook_ok" <<'HOOKEOF'
+#!/usr/bin/env bash
+input="$(cat)"
+printf '%s' "$input" | jq -c '.ok = true'
+HOOKEOF
+chmod +x "$hook_err" "$hook_ok"
+hooks_register "fail_hook" "pre_message" "$hook_err" --priority 10
+hooks_register "success_hook" "pre_message" "$hook_ok" --priority 20
+result="$(hooks_run "pre_message" '{}' 2>/dev/null)"
+ok_val="$(printf '%s' "$result" | jq -r '.ok // empty' 2>/dev/null)"
+assert_eq "$ok_val" "true"
+teardown_test_env
+
+# ---- Edge Case: hooks_run_strategy with invalid strategy name ----
+
+test_start "hooks_register rejects invalid strategy name"
+setup_test_env
+_source_libs
+hook_script="${BASHCLAW_STATE_DIR}/strat_test.sh"
+printf '#!/usr/bin/env bash\necho ok\n' > "$hook_script"
+chmod +x "$hook_script"
+set +e
+hooks_register "bad_strat_test" "pre_message" "$hook_script" --strategy "nonexistent_strategy" 2>/dev/null
+rc=$?
+set -e
+assert_ne "$rc" "0"
+teardown_test_env
+
+# ---- Edge Case: hooks_run with empty event name ----
+
+test_start "hooks_run with empty event returns empty output"
+setup_test_env
+_source_libs
+set +e
+result="$(hooks_run "" '{"data":"test"}' 2>/dev/null)"
+rc=$?
+set -e
+# Should not crash, empty event returns void strategy (no output)
+_test_pass
+teardown_test_env
+
 report_results

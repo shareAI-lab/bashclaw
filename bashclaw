@@ -13,6 +13,31 @@ for _lib in "${BASHCLAW_ROOT}"/lib/*.sh; do
 done
 unset _lib
 
+# Load .env if present
+_load_env() {
+  local env_file="${BASHCLAW_STATE_DIR}/.env"
+  if [[ -f "$env_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      # Skip comments and empty lines
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      # Only export valid var=value lines
+      if [[ "$line" =~ ^[A-Za-z_][A-Za-z_0-9]*= ]]; then
+        export "$line"
+      fi
+    done < "$env_file"
+  fi
+}
+
+# Check state dir and give helpful error
+_require_state_dir() {
+  if [[ ! -d "$BASHCLAW_STATE_DIR" ]]; then
+    log_error "State directory missing: $BASHCLAW_STATE_DIR"
+    printf 'Run "bashclaw onboard" to initialize, or create it manually:\n' >&2
+    printf '  mkdir -p %s\n' "$BASHCLAW_STATE_DIR" >&2
+    exit 1
+  fi
+}
+
 usage() {
   cat <<EOF
 bashclaw v${BASHCLAW_VERSION} - Bash-native AI agent framework
@@ -20,23 +45,24 @@ bashclaw v${BASHCLAW_VERSION} - Bash-native AI agent framework
 Usage: bashclaw <command> [options]
 
 Commands:
-  agent       Manage agents (start, stop, list, logs)
-  gateway     Start/stop the HTTP gateway
-  daemon      Manage system service (install, status, logs)
-  message     Send a message to an agent
-  config      Manage configuration
-  session     Manage conversation sessions
-  memory      Manage persistent key-value memory
-  cron        Manage scheduled jobs
-  hooks       Manage event hooks
-  boot        Run or check agent boot sequence
-  security    Security policy and pairing management
-  onboard     Interactive setup wizard
-  status      Show system status
-  doctor      Run diagnostics
-  update      Update bashclaw to latest version
-  completion  Generate shell completion scripts
-  version     Show version info
+  agent             Manage agents (start, stop, list, logs)
+  gateway           Start/stop the HTTP gateway
+  daemon            Manage system service (install, status, logs)
+  message  (msg)    Send a message to an agent
+  config   (cfg)    Manage configuration
+  session  (sess)   Manage conversation sessions
+  memory   (mem)    Manage persistent key-value memory
+  cron              Manage scheduled jobs
+  hooks             Manage event hooks
+  boot              Run or check agent boot sequence
+  security (sec)    Security policy and pairing management
+  onboard  (setup)  Interactive setup wizard
+  status            Show system status
+  doctor            Run diagnostics
+  selftest          Run unit tests
+  update            Update bashclaw to latest version
+  completion        Generate shell completion scripts
+  version           Show version info
 
 Options:
   -h, --help      Show this help
@@ -55,21 +81,67 @@ cmd_version() {
   printf 'bashclaw %s\n' "$BASHCLAW_VERSION"
 }
 
+_version_compare() {
+  local v1="$1" v2="$2"
+  if [[ "$v1" == "$v2" ]]; then
+    return 0
+  fi
+  local IFS='.'
+  local -a parts1=($v1) parts2=($v2)
+  local i
+  for i in 0 1 2; do
+    local n1="${parts1[$i]:-0}"
+    local n2="${parts2[$i]:-0}"
+    if (( n1 > n2 )); then
+      return 1
+    elif (( n1 < n2 )); then
+      return 2
+    fi
+  done
+  return 0
+}
+
+_extract_version() {
+  local script="$1"
+  local ver
+  ver="$(sed -n 's/^BASHCLAW_VERSION="\([^"]*\)".*/\1/p' "$script" | head -1)"
+  printf '%s' "$ver"
+}
+
 cmd_update() {
   local install_dir="$BASHCLAW_ROOT"
+  local old_version="$BASHCLAW_VERSION"
 
   if [[ -d "${install_dir}/.git" ]]; then
     log_info "Updating via git pull..."
-    (cd "$install_dir" && git pull --ff-only)
-    if [[ $? -eq 0 ]]; then
-      printf 'Updated to latest version.\n'
+    if (cd "$install_dir" && git pull --ff-only); then
+      local new_version
+      new_version="$(_extract_version "${install_dir}/bashclaw")"
+      new_version="${new_version:-$old_version}"
+      local cmp_result=0
+      _version_compare "$old_version" "$new_version" || cmp_result=$?
+      if [[ "$cmp_result" -eq 0 ]]; then
+        printf 'Already up to date: %s\n' "$old_version"
+      else
+        printf 'Updated: %s -> %s\n' "$old_version" "$new_version"
+      fi
     else
       log_error "Git pull failed"
       return 1
     fi
-  elif [[ -f "${install_dir}/../install.sh" ]]; then
+  elif [[ -f "${install_dir}/install.sh" ]]; then
     log_info "Re-running installer..."
-    bash "${install_dir}/../install.sh"
+    bash "${install_dir}/install.sh"
+    local new_version
+    new_version="$(_extract_version "${install_dir}/bashclaw")"
+    new_version="${new_version:-$old_version}"
+    local cmp_result=0
+    _version_compare "$old_version" "$new_version" || cmp_result=$?
+    if [[ "$cmp_result" -eq 0 ]]; then
+      printf 'Already up to date: %s\n' "$old_version"
+    else
+      printf 'Updated: %s -> %s\n' "$old_version" "$new_version"
+    fi
   else
     log_error "Cannot determine installation method. Please re-run the installer."
     return 1
@@ -251,26 +323,49 @@ cmd_doctor() {
   printf '=== bashclaw doctor ===\n\n'
 
   # Check required commands
+  local curl_available=false
   local cmds=(bash jq curl)
   for cmd in "${cmds[@]}"; do
     if is_command_available "$cmd"; then
       printf '[OK]   %s found: %s\n' "$cmd" "$(command -v "$cmd")"
+      [[ "$cmd" == "curl" ]] && curl_available=true
     else
       printf '[FAIL] %s not found\n' "$cmd"
       issues=$((issues + 1))
     fi
   done
 
+  # wget fallback if curl is missing
+  if [[ "$curl_available" == "false" ]]; then
+    if is_command_available wget; then
+      printf '[INFO] wget found as potential fallback: %s\n' "$(command -v wget)"
+    else
+      printf '[WARN] Neither curl nor wget available\n'
+    fi
+  fi
+
+  # Check git
+  if is_command_available git; then
+    printf '[OK]   git found: %s\n' "$(command -v git)"
+  else
+    printf '[WARN] git not found (needed for git-based updates)\n'
+  fi
+
   # Check gateway HTTP server capability
   local http_server=""
   if is_command_available socat; then
-    printf '[OK]   socat found (gateway: concurrent HTTP)\n'
+    local socat_ver
+    socat_ver="$(socat -V 2>/dev/null | head -1 || printf 'unknown')"
+    printf '[OK]   socat found (gateway: concurrent HTTP) - %s\n' "$socat_ver"
     http_server="socat"
   elif is_command_available nc; then
-    printf '[OK]   nc found (gateway: serial HTTP via FIFO)\n'
+    printf '[OK]   nc found (gateway: serial HTTP via FIFO): %s\n' "$(command -v nc)"
     http_server="nc"
+  elif is_command_available ncat; then
+    printf '[OK]   ncat found (gateway: serial HTTP): %s\n' "$(command -v ncat)"
+    http_server="ncat"
   else
-    printf '[WARN] No HTTP server tool found (socat or nc). Gateway will not serve HTTP.\n'
+    printf '[WARN] No HTTP server tool found (socat, nc, or ncat). Gateway will not serve HTTP.\n'
     issues=$((issues + 1))
   fi
 
@@ -284,13 +379,39 @@ cmd_doctor() {
     fi
   done
 
+  # Check agent CLI engines
+  printf '\n  --- Engine Detection ---\n'
+  if is_command_available claude; then
+    local claude_ver
+    claude_ver="$(claude --version 2>/dev/null || printf 'unknown')"
+    printf '[OK]   Claude Code CLI: %s\n' "$claude_ver"
+  else
+    printf '[INFO] Claude Code CLI: not installed\n'
+  fi
+  if is_command_available codex; then
+    local codex_ver
+    codex_ver="$(codex --version 2>/dev/null || printf 'unknown')"
+    printf '[OK]   Codex CLI: %s\n' "$codex_ver"
+  else
+    printf '[INFO] Codex CLI: not installed\n'
+  fi
+
+  local default_engine
+  default_engine="$(config_get '.agents.defaults.engine' 'builtin')"
+  printf '[INFO] Default engine: %s\n' "$default_engine"
+  if [[ "$default_engine" == "auto" ]]; then
+    local detected
+    detected="$(engine_detect)"
+    printf '[INFO] Auto-detected: %s\n' "$detected"
+  fi
+
   printf '\n'
 
   # Check state directory
   if [[ -d "$BASHCLAW_STATE_DIR" ]]; then
     printf '[OK]   State dir exists: %s\n' "$BASHCLAW_STATE_DIR"
   else
-    printf '[WARN] State dir missing: %s\n' "$BASHCLAW_STATE_DIR"
+    printf '[WARN] State dir missing: %s (run: bashclaw onboard)\n' "$BASHCLAW_STATE_DIR"
   fi
 
   # Check config
@@ -308,11 +429,87 @@ cmd_doctor() {
     printf '[WARN] No config file (run: bashclaw config init)\n'
   fi
 
-  # Check API key
+  # Check .env file and API keys
+  local env_file="${BASHCLAW_STATE_DIR}/.env"
+  local env_has_key=false
+  if [[ -f "$env_file" ]]; then
+    printf '[OK]   .env file found: %s\n' "$env_file"
+    if grep -q 'ANTHROPIC_API_KEY\|OPENAI_API_KEY\|DEEPSEEK_API_KEY' "$env_file" 2>/dev/null; then
+      env_has_key=true
+      printf '[OK]   .env contains API key(s)\n'
+    else
+      printf '[WARN] .env exists but contains no API keys\n'
+    fi
+  else
+    printf '[WARN] No .env file found: %s\n' "$env_file"
+  fi
+
+  # Check API key in environment
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     printf '[OK]   ANTHROPIC_API_KEY is set\n'
   else
     printf '[WARN] ANTHROPIC_API_KEY not set\n'
+    if [[ "$env_has_key" == "true" ]]; then
+      printf '       Hint: .env has API keys. They are loaded automatically on command startup.\n'
+      printf '       For your current shell, run: source %s\n' "$env_file"
+    fi
+  fi
+
+  # Check disk space on state directory filesystem
+  if [[ -d "$BASHCLAW_STATE_DIR" ]]; then
+    local free_kb
+    free_kb="$(df -k "$BASHCLAW_STATE_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
+    if [[ -n "$free_kb" && "$free_kb" =~ ^[0-9]+$ ]]; then
+      local free_mb=$((free_kb / 1024))
+      if (( free_mb >= 1024 )); then
+        local free_gb
+        free_gb="$(awk "BEGIN{printf \"%.1f\", $free_mb / 1024}")"
+        printf '[OK]   Disk: %sGB free\n' "$free_gb"
+      else
+        printf '[OK]   Disk: %dMB free\n' "$free_mb"
+      fi
+      if (( free_mb < 100 )); then
+        printf '[WARN] Low disk space on %s (less than 100MB free)\n' "$BASHCLAW_STATE_DIR"
+        issues=$((issues + 1))
+      fi
+    fi
+  fi
+
+  # Check file permissions on sensitive files
+  local cfg_perms env_perms
+  if [[ -f "$cfg_path" ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      cfg_perms="$(stat -f '%Lp' "$cfg_path" 2>/dev/null)"
+    else
+      cfg_perms="$(stat -c '%a' "$cfg_path" 2>/dev/null)"
+    fi
+    if [[ -n "$cfg_perms" ]]; then
+      if [[ "$cfg_perms" == "600" ]]; then
+        printf '[OK]   Config permissions: %s\n' "$cfg_perms"
+      elif [[ "${cfg_perms: -1}" != "0" ]]; then
+        printf '[WARN] Config file is world-readable (mode %s, expected 600): %s\n' "$cfg_perms" "$cfg_path"
+        issues=$((issues + 1))
+      else
+        printf '[OK]   Config permissions: %s\n' "$cfg_perms"
+      fi
+    fi
+  fi
+  if [[ -f "$env_file" ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      env_perms="$(stat -f '%Lp' "$env_file" 2>/dev/null)"
+    else
+      env_perms="$(stat -c '%a' "$env_file" 2>/dev/null)"
+    fi
+    if [[ -n "$env_perms" ]]; then
+      if [[ "$env_perms" == "600" ]]; then
+        printf '[OK]   .env permissions: %s\n' "$env_perms"
+      elif [[ "${env_perms: -1}" != "0" ]]; then
+        printf '[WARN] .env file is world-readable (mode %s, expected 600): %s\n' "$env_perms" "$env_file"
+        issues=$((issues + 1))
+      else
+        printf '[OK]   .env permissions: %s\n' "$env_perms"
+      fi
+    fi
   fi
 
   printf '\n'
@@ -414,10 +611,73 @@ cmd_security() {
   esac
 }
 
+cmd_selftest() {
+  local test_script="${BASHCLAW_ROOT}/tests/run_all.sh"
+  if [[ ! -f "$test_script" ]]; then
+    log_error "Test suite not found: $test_script"
+    return 1
+  fi
+  bash "$test_script" --unit "$@"
+}
+
+_suggest_command() {
+  local input="$1"
+  local known_cmds="agent message msg config cfg session sess memory mem doctor gateway daemon cron hook security sec plugin skill onboard setup status selftest version help update"
+  local best_match=""
+
+  if [[ "${#input}" -lt 2 ]]; then
+    return
+  fi
+
+  # Check prefix match: input is a prefix of a known command
+  for cmd in $known_cmds; do
+    if [[ "$cmd" == "${input}"* ]]; then
+      best_match="$cmd"
+      break
+    fi
+  done
+
+  # Check reverse: known command is a prefix of input
+  if [[ -z "$best_match" ]]; then
+    for cmd in $known_cmds; do
+      if [[ "${input}" == "${cmd}"* ]]; then
+        best_match="$cmd"
+        break
+      fi
+    done
+  fi
+
+  # Check shared first 2+ characters and length difference <= 2
+  if [[ -z "$best_match" ]]; then
+    local input_prefix="${input:0:2}"
+    for cmd in $known_cmds; do
+      local cmd_prefix="${cmd:0:2}"
+      if [[ "$input_prefix" == "$cmd_prefix" ]]; then
+        local len_diff=$(( ${#input} - ${#cmd} ))
+        if [[ "$len_diff" -lt 0 ]]; then
+          len_diff=$(( -len_diff ))
+        fi
+        if [[ "$len_diff" -le 2 ]]; then
+          best_match="$cmd"
+          break
+        fi
+      fi
+    done
+  fi
+
+  if [[ -n "$best_match" ]]; then
+    printf 'Did you mean: bashclaw %s?\n\n' "$best_match" >&2
+  fi
+}
+
 # Route to sub-commands
 main() {
   local cmd="${1:-}"
   shift || true
+
+  # Initialize state directories and load environment
+  ensure_state_dir
+  _load_env
 
   case "$cmd" in
     agent)
@@ -462,6 +722,9 @@ main() {
     doctor)
       cmd_doctor
       ;;
+    selftest)
+      cmd_selftest "$@"
+      ;;
     update)
       cmd_update
       ;;
@@ -476,6 +739,7 @@ main() {
       ;;
     *)
       log_error "Unknown command: $cmd"
+      _suggest_command "$cmd"
       usage
       exit 1
       ;;

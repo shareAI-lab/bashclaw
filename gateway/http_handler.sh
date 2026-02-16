@@ -5,13 +5,10 @@
 # Source the main bashclaw if not already loaded
 if ! declare -f log_info &>/dev/null; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  source "${SCRIPT_DIR}/lib/log.sh"
-  source "${SCRIPT_DIR}/lib/utils.sh"
-  source "${SCRIPT_DIR}/lib/config.sh"
-  source "${SCRIPT_DIR}/lib/session.sh"
-  source "${SCRIPT_DIR}/lib/tools.sh"
-  source "${SCRIPT_DIR}/lib/agent.sh"
-  source "${SCRIPT_DIR}/lib/routing.sh"
+  for _lib in "${SCRIPT_DIR}"/lib/*.sh; do
+    [[ -f "$_lib" ]] && source "$_lib"
+  done
+  unset _lib
 
   # Load .env if present
   env_file="${BASHCLAW_STATE_DIR:?}/.env"
@@ -23,6 +20,7 @@ if ! declare -f log_info &>/dev/null; then
 fi
 
 BASHCLAW_UI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ui"
+GATEWAY_MAX_BODY_SIZE="${GATEWAY_MAX_BODY_SIZE:-1048576}"
 
 # ---- HTTP Request Parser ----
 
@@ -37,6 +35,8 @@ _http_read_request() {
   HTTP_BODY=""
   HTTP_CONTENT_LENGTH=0
   HTTP_QUERY=""
+  HTTP_AUTH_HEADER=""
+  HTTP_ORIGIN=""
 
   # Parse request line
   IFS=' ' read -r HTTP_METHOD HTTP_PATH HTTP_VERSION <<< "$line"
@@ -57,11 +57,20 @@ _http_read_request() {
     if [[ "$lower_line" == content-length:* ]]; then
       HTTP_CONTENT_LENGTH="${line#*: }"
       HTTP_CONTENT_LENGTH="${HTTP_CONTENT_LENGTH%%$'\r'}"
+    elif [[ "$lower_line" == authorization:* ]]; then
+      HTTP_AUTH_HEADER="${line#*: }"
+      HTTP_AUTH_HEADER="${HTTP_AUTH_HEADER%%$'\r'}"
+    elif [[ "$lower_line" == origin:* ]]; then
+      HTTP_ORIGIN="${line#*: }"
+      HTTP_ORIGIN="${HTTP_ORIGIN%%$'\r'}"
     fi
   done
 
   # Read body if present
   if (( HTTP_CONTENT_LENGTH > 0 )); then
+    if (( HTTP_CONTENT_LENGTH > GATEWAY_MAX_BODY_SIZE )); then
+      return 1
+    fi
     HTTP_BODY="$(head -c "$HTTP_CONTENT_LENGTH")"
   fi
 }
@@ -81,6 +90,8 @@ _http_respond() {
     401) status_text="Unauthorized" ;;
     404) status_text="Not Found" ;;
     405) status_text="Method Not Allowed" ;;
+    413) status_text="Payload Too Large" ;;
+    429) status_text="Too Many Requests" ;;
     500) status_text="Internal Server Error" ;;
     *) status_text="Unknown" ;;
   esac
@@ -91,7 +102,26 @@ _http_respond() {
   printf 'Content-Type: %s\r\n' "$content_type"
   printf 'Content-Length: %d\r\n' "$body_length"
   printf 'Connection: close\r\n'
-  printf 'Access-Control-Allow-Origin: *\r\n'
+
+  # CORS origin handling
+  local cors_origin="*"
+  local allowed_origins
+  allowed_origins="$(config_get_raw '.gateway.cors.origins // null' 2>/dev/null)"
+  if [[ -n "$allowed_origins" && "$allowed_origins" != "null" && "$allowed_origins" != "[]" ]]; then
+    cors_origin=""
+    if [[ -n "$HTTP_ORIGIN" ]]; then
+      local match
+      match="$(printf '%s' "$allowed_origins" | jq -r --arg o "$HTTP_ORIGIN" \
+        'if any(. == $o) then $o else "" end' 2>/dev/null)"
+      if [[ -n "$match" ]]; then
+        cors_origin="$match"
+      fi
+    fi
+  fi
+
+  if [[ -n "$cors_origin" ]]; then
+    printf 'Access-Control-Allow-Origin: %s\r\n' "$cors_origin"
+  fi
   printf 'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n'
   printf 'Access-Control-Allow-Headers: Content-Type, Authorization\r\n'
   printf '\r\n'
@@ -114,19 +144,57 @@ _http_serve_file() {
   fi
 
   local mime_type="application/octet-stream"
+  local is_binary=false
   case "$file_path" in
     *.html) mime_type="text/html; charset=utf-8" ;;
     *.css)  mime_type="text/css; charset=utf-8" ;;
     *.js)   mime_type="application/javascript; charset=utf-8" ;;
     *.json) mime_type="application/json; charset=utf-8" ;;
     *.svg)  mime_type="image/svg+xml" ;;
-    *.png)  mime_type="image/png" ;;
-    *.ico)  mime_type="image/x-icon" ;;
+    *.png)  mime_type="image/png"; is_binary=true ;;
+    *.ico)  mime_type="image/x-icon"; is_binary=true ;;
+    *.jpg|*.jpeg) mime_type="image/jpeg"; is_binary=true ;;
+    *.gif)  mime_type="image/gif"; is_binary=true ;;
+    *.woff|*.woff2) mime_type="font/woff2"; is_binary=true ;;
+    *.ttf)  mime_type="font/ttf"; is_binary=true ;;
   esac
 
-  local body
-  body="$(cat "$file_path")"
-  _http_respond 200 "$mime_type" "$body"
+  local file_size
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    file_size="$(stat -f%z "$file_path" 2>/dev/null)" || file_size=0
+  else
+    file_size="$(stat -c%s "$file_path" 2>/dev/null)" || file_size=0
+  fi
+
+  local status_text="OK"
+  printf 'HTTP/1.1 200 %s\r\n' "$status_text"
+  printf 'Content-Type: %s\r\n' "$mime_type"
+  printf 'Content-Length: %d\r\n' "$file_size"
+  printf 'Connection: close\r\n'
+
+  local cors_origin="*"
+  local allowed_origins
+  allowed_origins="$(config_get_raw '.gateway.cors.origins // null' 2>/dev/null)"
+  if [[ -n "$allowed_origins" && "$allowed_origins" != "null" && "$allowed_origins" != "[]" ]]; then
+    cors_origin=""
+    if [[ -n "$HTTP_ORIGIN" ]]; then
+      local match
+      match="$(printf '%s' "$allowed_origins" | jq -r --arg o "$HTTP_ORIGIN" \
+        'if any(. == $o) then $o else "" end' 2>/dev/null)"
+      if [[ -n "$match" ]]; then
+        cors_origin="$match"
+      fi
+    fi
+  fi
+  if [[ -n "$cors_origin" ]]; then
+    printf 'Access-Control-Allow-Origin: %s\r\n' "$cors_origin"
+  fi
+  printf 'Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n'
+  printf 'Access-Control-Allow-Headers: Content-Type, Authorization\r\n'
+  printf '\r\n'
+
+  # Pipe file content directly via cat to preserve binary data (null bytes)
+  cat "$file_path"
 }
 
 # ---- Auth Check ----
@@ -135,21 +203,45 @@ _http_check_auth() {
   local auth_token
   auth_token="$(config_get '.gateway.auth.token' '')"
 
-  # No token configured = no auth required
+  # No token configured = no auth required (backward compat)
   if [[ -z "$auth_token" ]]; then
     return 0
   fi
 
-  # Check Authorization header from request headers
-  # In socat mode, we need to extract it during header parsing
-  # For now, skip auth in the minimal handler
-  return 0
+  # Check rate limit before processing the auth attempt
+  if ! security_rate_limit "gateway_auth" 10 60; then
+    return 2
+  fi
+
+  # Extract bearer token from Authorization header
+  local bearer=""
+  if [[ "$HTTP_AUTH_HEADER" == Bearer\ * || "$HTTP_AUTH_HEADER" == bearer\ * ]]; then
+    bearer="${HTTP_AUTH_HEADER#* }"
+  elif [[ -n "$HTTP_AUTH_HEADER" ]]; then
+    bearer="$HTTP_AUTH_HEADER"
+  fi
+
+  if [[ -z "$bearer" ]]; then
+    security_rate_limit "gateway_auth" 10 60
+    return 1
+  fi
+
+  # Timing-safe comparison
+  if _security_safe_equal "$bearer" "$auth_token"; then
+    return 0
+  fi
+
+  security_rate_limit "gateway_auth" 10 60
+  return 1
 }
 
 # ---- Route Handler ----
 
 handle_request() {
-  _http_read_request
+  if ! _http_read_request; then
+    _http_respond_json 413 '{"error":"request body too large"}'
+    return
+  fi
 
   # Handle CORS preflight
   if [[ "$HTTP_METHOD" == "OPTIONS" ]]; then
@@ -158,6 +250,23 @@ handle_request() {
   fi
 
   log_debug "HTTP request: $HTTP_METHOD $HTTP_PATH"
+
+  # Auth check (exempt health, status, UI, root)
+  case "$HTTP_PATH" in
+    /health|/healthz|/status|/api/status|/ui|/ui/*|/)
+      ;;
+    *)
+      local auth_rc=0
+      _http_check_auth || auth_rc=$?
+      if [[ "$auth_rc" -eq 2 ]]; then
+        _http_respond_json 429 '{"error":"too many requests"}'
+        return
+      elif [[ "$auth_rc" -ne 0 ]]; then
+        _http_respond_json 401 '{"error":"unauthorized"}'
+        return
+      fi
+      ;;
+  esac
 
   # Static file serving for /ui paths
   case "$HTTP_PATH" in
@@ -236,6 +345,22 @@ handle_request() {
       ;;
     PUT:/api/env)
       _handle_api_env_set
+      ;;
+
+    # OpenAI-compatible API
+    POST:/v1/chat/completions)
+      _handle_openai_chat_completions
+      ;;
+    GET:/v1/models)
+      _handle_openai_models
+      ;;
+
+    # REST API: Cron run history
+    GET:/api/cron/runs/*)
+      _handle_api_cron_run_history
+      ;;
+    GET:/api/cron/stats/*)
+      _handle_api_cron_run_stats
       ;;
 
     # Root redirects to UI
@@ -321,7 +446,7 @@ _handle_chat() {
   fi
 
   local response
-  response="$(agent_run "$agent_id" "$message" "$channel" "$sender" 2>/dev/null)"
+  response="$(engine_run "$agent_id" "$message" "$channel" "$sender" 2>/dev/null)"
 
   if [[ -n "$response" ]]; then
     local json
@@ -447,10 +572,26 @@ _handle_api_config_set() {
     return
   fi
 
+  # Sanitize input: only allow modification of safe top-level keys.
+  # Reject security, gateway.auth, and plugins to prevent privilege escalation.
+  local sanitized
+  sanitized="$(printf '%s' "$HTTP_BODY" | jq '{
+    agents: .agents,
+    channels: .channels,
+    session: .session,
+    gateway: (if .gateway then {port: .gateway.port} else null end),
+    meta: .meta
+  } | with_entries(select(.value != null))')"
+
+  if [[ -z "$sanitized" || "$sanitized" == "{}" ]]; then
+    _http_respond_json 400 '{"error":"no allowed fields in request body"}'
+    return
+  fi
+
   # Merge partial updates into existing config
   _config_ensure_loaded
   local merged
-  merged="$(printf '%s\n%s' "$_CONFIG_CACHE" "$HTTP_BODY" | jq -s '.[0] * .[1]' 2>/dev/null)"
+  merged="$(printf '%s\n%s' "$_CONFIG_CACHE" "$sanitized" | jq -s '.[0] * .[1]' 2>/dev/null)"
 
   if [[ -z "$merged" ]]; then
     _http_respond_json 500 '{"error":"config merge failed"}'
@@ -503,21 +644,27 @@ _handle_api_models() {
   }' 2>/dev/null)"
 
   # Check which providers have API keys configured
-  local providers_with_keys="[]"
+  local providers_ndjson=""
   local p_list
   p_list="$(printf '%s' "$catalog" | jq -r '.providers | to_entries[] | "\(.key)|\(.value.api_key_env // "")"' 2>/dev/null)"
   while IFS='|' read -r p_id p_env; do
     [[ -z "$p_id" ]] && continue
     local has_key="false"
     if [[ -n "$p_env" ]]; then
-      local key_val
-      eval "key_val=\"\${${p_env}:-}\""
+      local key_val="${!p_env:-}"
       if [[ -n "$key_val" ]]; then
         has_key="true"
       fi
     fi
-    providers_with_keys="$(printf '%s' "$providers_with_keys" | jq --arg p "$p_id" --arg h "$has_key" '. + [{id: $p, has_key: ($h == "true")}]')"
+    providers_ndjson="${providers_ndjson}$(jq -nc --arg p "$p_id" --arg h "$has_key" '{id: $p, has_key: ($h == "true")}')"$'\n'
   done <<< "$p_list"
+
+  local providers_with_keys
+  if [[ -n "$providers_ndjson" ]]; then
+    providers_with_keys="$(printf '%s' "$providers_ndjson" | jq -s '.')"
+  else
+    providers_with_keys="[]"
+  fi
 
   # Merge has_key info into response
   response="$(printf '%s' "$response" | jq --argjson pk "$providers_with_keys" '
@@ -532,7 +679,7 @@ _handle_api_models() {
 _handle_api_sessions_list() {
   require_command jq "sessions API requires jq"
 
-  local sessions="[]"
+  local sessions_ndjson=""
   local session_dir="${BASHCLAW_STATE_DIR}/sessions"
 
   if [[ -d "$session_dir" ]]; then
@@ -545,9 +692,16 @@ _handle_api_sessions_list() {
       msg_count="$(wc -l < "$f" | tr -d ' ')"
       local size
       size="$(wc -c < "$f" | tr -d ' ')"
-      sessions="$(printf '%s' "$sessions" | jq --arg n "$name" --argjson c "$msg_count" --argjson s "$size" \
-        '. + [{name: $n, messages: $c, size: $s}]')"
+      sessions_ndjson="${sessions_ndjson}$(jq -nc --arg n "$name" --argjson c "$msg_count" --argjson s "$size" \
+        '{name: $n, messages: $c, size: $s}')"$'\n'
     done
+  fi
+
+  local sessions
+  if [[ -n "$sessions_ndjson" ]]; then
+    sessions="$(printf '%s' "$sessions_ndjson" | jq -s '.')"
+  else
+    sessions="[]"
   fi
 
   _http_respond_json 200 "$(jq -nc --argjson s "$sessions" '{sessions: $s, count: ($s | length)}')"
@@ -561,7 +715,7 @@ _handle_api_channels() {
   local channel_dir
   channel_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/channels"
 
-  local channels="[]"
+  local channels_ndjson=""
   if [[ -d "$channel_dir" ]]; then
     local f
     for f in "${channel_dir}"/*.sh; do
@@ -570,9 +724,16 @@ _handle_api_channels() {
       ch_name="$(basename "$f" .sh)"
       local enabled
       enabled="$(config_channel_get "$ch_name" "enabled" "false")"
-      channels="$(printf '%s' "$channels" | jq --arg n "$ch_name" --arg e "$enabled" \
-        '. + [{name: $n, enabled: ($e == "true"), installed: true}]')"
+      channels_ndjson="${channels_ndjson}$(jq -nc --arg n "$ch_name" --arg e "$enabled" \
+        '{name: $n, enabled: ($e == "true"), installed: true}')"$'\n'
     done
+  fi
+
+  local channels
+  if [[ -n "$channels_ndjson" ]]; then
+    channels="$(printf '%s' "$channels_ndjson" | jq -s '.')"
+  else
+    channels="[]"
   fi
 
   _http_respond_json 200 "$(jq -nc --argjson c "$channels" '{channels: $c, count: ($c | length)}')"
@@ -587,34 +748,39 @@ _handle_api_env_get() {
   catalog="$(_models_catalog_load)"
 
   # List provider env vars and whether they are set (never expose actual values)
-  local env_status="[]"
+  local env_ndjson=""
   local p_list
   p_list="$(printf '%s' "$catalog" | jq -r '.providers | to_entries[] | "\(.key)|\(.value.api_key_env // "")"' 2>/dev/null)"
   while IFS='|' read -r p_id p_env; do
     [[ -z "$p_id" ]] && continue
     local is_set="false"
     if [[ -n "$p_env" ]]; then
-      local key_val
-      eval "key_val=\"\${${p_env}:-}\""
+      local key_val="${!p_env:-}"
       if [[ -n "$key_val" ]]; then
         is_set="true"
       fi
     fi
-    env_status="$(printf '%s' "$env_status" | jq --arg p "$p_id" --arg e "$p_env" --arg s "$is_set" \
-      '. + [{provider: $p, env_var: $e, is_set: ($s == "true")}]')"
+    env_ndjson="${env_ndjson}$(jq -nc --arg p "$p_id" --arg e "$p_env" --arg s "$is_set" \
+      '{provider: $p, env_var: $e, is_set: ($s == "true")}')"$'\n'
   done <<< "$p_list"
 
   # Also check search API keys
   for search_key in BRAVE_SEARCH_API_KEY PERPLEXITY_API_KEY; do
-    local sk_val
-    eval "sk_val=\"\${${search_key}:-}\""
+    local sk_val="${!search_key:-}"
     local sk_set="false"
     if [[ -n "$sk_val" ]]; then
       sk_set="true"
     fi
-    env_status="$(printf '%s' "$env_status" | jq --arg e "$search_key" --arg s "$sk_set" \
-      '. + [{provider: "search", env_var: $e, is_set: ($s == "true")}]')"
+    env_ndjson="${env_ndjson}$(jq -nc --arg e "$search_key" --arg s "$sk_set" \
+      '{provider: "search", env_var: $e, is_set: ($s == "true")}')"$'\n'
   done
+
+  local env_status
+  if [[ -n "$env_ndjson" ]]; then
+    env_status="$(printf '%s' "$env_ndjson" | jq -s '.')"
+  else
+    env_status="[]"
+  fi
 
   _http_respond_json 200 "$(jq -nc --argjson e "$env_status" '{env: $e}')"
 }
@@ -688,6 +854,206 @@ _handle_api_env_set() {
   chmod 600 "$env_file" 2>/dev/null || true
 
   _http_respond_json 200 "$(jq -nc --argjson n "$updated" '{updated: $n}')"
+}
+
+# ---- OpenAI-Compatible API ----
+
+_handle_openai_chat_completions() {
+  require_command jq "openai compat handler requires jq"
+
+  if [[ -z "$HTTP_BODY" ]]; then
+    _http_respond_json 400 '{"error":{"message":"request body required","type":"invalid_request_error"}}'
+    return
+  fi
+
+  # Validate JSON
+  if ! printf '%s' "$HTTP_BODY" | jq empty 2>/dev/null; then
+    _http_respond_json 400 '{"error":{"message":"invalid JSON in request body","type":"invalid_request_error"}}'
+    return
+  fi
+
+  # Parse OpenAI-format request
+  local parsed
+  parsed="$(printf '%s' "$HTTP_BODY" | jq -r '[
+    (.model // ""),
+    (.stream // false | tostring),
+    (.max_tokens // 4096 | tostring)
+  ] | join("\n")' 2>/dev/null)"
+
+  local model_name stream_flag max_tokens
+  {
+    IFS= read -r model_name
+    IFS= read -r stream_flag
+    IFS= read -r max_tokens
+  } <<< "$parsed"
+
+  # Streaming is not supported under socat fork model
+  if [[ "$stream_flag" == "true" ]]; then
+    _http_respond_json 400 '{"error":{"message":"streaming not supported, set stream=false","type":"invalid_request_error"}}'
+    return
+  fi
+
+  # Validate messages array exists and is non-empty
+  local messages_count
+  messages_count="$(printf '%s' "$HTTP_BODY" | jq '[.messages // [] | .[]?] | length' 2>/dev/null)"
+  if [[ -z "$messages_count" || "$messages_count" == "0" ]]; then
+    _http_respond_json 400 '{"error":{"message":"messages array is required and must not be empty","type":"invalid_request_error"}}'
+    return
+  fi
+
+  # Extract last user message from messages array
+  local user_message
+  user_message="$(printf '%s' "$HTTP_BODY" | jq -r '
+    [.messages[]? | select(.role == "user") | .content] | last // ""
+  ' 2>/dev/null)"
+
+  if [[ -z "$user_message" ]]; then
+    _http_respond_json 400 '{"error":{"message":"no user message found in messages array","type":"invalid_request_error"}}'
+    return
+  fi
+
+  # Extract system message if present (first system message)
+  local system_message
+  system_message="$(printf '%s' "$HTTP_BODY" | jq -r '
+    [.messages[]? | select(.role == "system") | .content] | first // ""
+  ' 2>/dev/null)"
+
+  # Prepend system context to user message if present
+  if [[ -n "$system_message" ]]; then
+    user_message="[System: ${system_message}]
+${user_message}"
+  fi
+
+  # Map model name to agent_id
+  local agent_id="main"
+  case "$model_name" in
+    agent:*)
+      # Explicit agent routing via agent:<name> prefix
+      agent_id="${model_name#agent:}"
+      ;;
+    gpt-*|claude-*|deepseek-*|glm-*|gemini-*|o1-*|o3-*|o4-*|mistral-*|grok-*|kimi-*|qwen-*|qwq-*)
+      agent_id="main"
+      ;;
+    ""|main)
+      agent_id="main"
+      ;;
+    *)
+      agent_id="$model_name"
+      ;;
+  esac
+
+  local response
+  response="$(engine_run "$agent_id" "$user_message" "openai" "api" 2>/dev/null)"
+
+  if [[ -z "$response" ]]; then
+    _http_respond_json 500 '{"error":{"message":"agent returned empty response","type":"server_error"}}'
+    return
+  fi
+
+  # Build OpenAI-format response
+  local completion_id
+  completion_id="chatcmpl-$(date +%s)$(( RANDOM % 10000 ))"
+  local created
+  created="$(date +%s)"
+
+  local result
+  result="$(jq -nc \
+    --arg id "$completion_id" \
+    --argjson created "$created" \
+    --arg model "$model_name" \
+    --arg content "$response" \
+    '{
+      id: $id,
+      object: "chat.completion",
+      created: $created,
+      model: $model,
+      choices: [{
+        index: 0,
+        message: {role: "assistant", content: $content},
+        finish_reason: "stop"
+      }],
+      usage: {prompt_tokens: 0, completion_tokens: 0, total_tokens: 0}
+    }')"
+
+  _http_respond_json 200 "$result"
+}
+
+_handle_openai_models() {
+  require_command jq "openai models handler requires jq"
+
+  local catalog
+  catalog="$(_models_catalog_load)"
+
+  local created
+  created="$(date +%s)"
+
+  local models_list
+  models_list="$(printf '%s' "$catalog" | jq --argjson ts "$created" '
+    [.providers | to_entries[] | .key as $prov | .value.models[]? | {
+      id: .id,
+      object: "model",
+      created: $ts,
+      owned_by: $prov
+    }]
+  ' 2>/dev/null)"
+
+  if [[ -z "$models_list" ]]; then
+    models_list="[]"
+  fi
+
+  local result
+  result="$(jq -nc --argjson data "$models_list" '{
+    object: "list",
+    data: $data
+  }')"
+
+  _http_respond_json 200 "$result"
+}
+
+# ---- REST API: Cron Run History ----
+
+_handle_api_cron_run_history() {
+  require_command jq "cron run history handler requires jq"
+
+  # Extract job_id from path: /api/cron/runs/{job_id}
+  local job_id="${HTTP_PATH#/api/cron/runs/}"
+  if [[ -z "$job_id" ]]; then
+    _http_respond_json 400 '{"error":"job_id is required"}'
+    return
+  fi
+
+  # Parse limit from query string
+  local limit=20
+  if [[ -n "$HTTP_QUERY" ]]; then
+    local q_limit
+    q_limit="$(printf '%s' "$HTTP_QUERY" | tr '&' '\n' | sed -n 's/^limit=//p')"
+    if [[ -n "$q_limit" && "$q_limit" =~ ^[0-9]+$ ]]; then
+      limit="$q_limit"
+    fi
+  fi
+
+  local history
+  history="$(cron_get_run_history "$job_id" "$limit")"
+
+  _http_respond_json 200 "$(jq -nc --argjson runs "$history" --arg jid "$job_id" \
+    '{job_id: $jid, runs: $runs, count: ($runs | length)}')"
+}
+
+_handle_api_cron_run_stats() {
+  require_command jq "cron run stats handler requires jq"
+
+  # Extract job_id from path: /api/cron/stats/{job_id}
+  local job_id="${HTTP_PATH#/api/cron/stats/}"
+  if [[ -z "$job_id" ]]; then
+    _http_respond_json 400 '{"error":"job_id is required"}'
+    return
+  fi
+
+  local stats
+  stats="$(cron_get_run_stats "$job_id")"
+
+  _http_respond_json 200 "$(jq -nc --argjson s "$stats" --arg jid "$job_id" \
+    '{job_id: $jid} + $s')"
 }
 
 # If executed directly (by socat), run the handler

@@ -24,7 +24,7 @@ dedup_check() {
   dir="$(_dedup_dir)"
 
   local safe_key
-  safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$key")"
   local file="${dir}/${safe_key}.json"
 
   if [[ ! -f "$file" ]]; then
@@ -64,7 +64,7 @@ dedup_record() {
   dir="$(_dedup_dir)"
 
   local safe_key
-  safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$key")"
   local file="${dir}/${safe_key}.json"
 
   local now
@@ -94,7 +94,7 @@ dedup_get() {
   local dir
   dir="$(_dedup_dir)"
   local safe_key
-  safe_key="$(printf '%s' "$key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$key")"
   local file="${dir}/${safe_key}.json"
 
   jq -r '.result // empty' < "$file" 2>/dev/null

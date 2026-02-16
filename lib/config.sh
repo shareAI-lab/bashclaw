@@ -239,9 +239,16 @@ config_init_default() {
       "queueMode": "followup",
       "queueDebounceMs": 0,
       "fallbackModels": [],
+      "engine": "auto",
       "tools": {
         "allow": [],
         "deny": []
+      },
+      "compaction": {
+        "mode": "summary",
+        "threshold": 0.8,
+        "reserveTokens": 50000,
+        "maxHistoryShare": 0.5
       },
       "heartbeat": {
         "enabled": false,
@@ -302,6 +309,11 @@ ENDJSON
 
   chmod 600 "$path" 2>/dev/null || true
   log_info "Created default config: $path"
+
+  # Initialize workspace with template bootstrap files
+  if declare -f workspace_init &>/dev/null; then
+    workspace_init
+  fi
 }
 
 config_backup() {

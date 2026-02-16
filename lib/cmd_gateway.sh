@@ -58,6 +58,11 @@ gateway_start() {
   log_info "Gateway starting on port $GATEWAY_PORT (pid=$$)"
   printf 'Dashboard: http://localhost:%s\n' "$GATEWAY_PORT"
 
+  # Fire gateway_start hook event
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "gateway_start" "{\"port\":$GATEWAY_PORT,\"pid\":$$}" 2>/dev/null || true
+  fi
+
   # Start background services
   gateway_start_channels &
   local channels_pid=$!
@@ -84,6 +89,12 @@ gateway_start() {
 
   # Cleanup on exit
   GATEWAY_RUNNING=false
+
+  # Fire gateway_stop hook event
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "gateway_stop" "{\"port\":$GATEWAY_PORT}" 2>/dev/null || true
+  fi
+
   kill "$channels_pid" "$cron_pid" "$health_pid" 2>/dev/null
   wait "$channels_pid" "$cron_pid" "$health_pid" 2>/dev/null
   rm -f "$GATEWAY_PID_FILE"

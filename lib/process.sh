@@ -35,7 +35,7 @@ process_enqueue() {
   local id
   id="$(uuid_generate)"
   local safe_id
-  safe_id="$(printf '%s' "${ts}_${id}" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_id="$(sanitize_key "${ts}_${id}")"
   local file="${dir}/${safe_id}.json"
   local now
   now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -270,15 +270,18 @@ _lane_max_for_type() {
 # Layer 1: Session-level enqueue.
 # Ensures max 1 concurrent execution per session key using lockfiles.
 # Blocks until the session lock is available, then runs the callback.
+# Usage: lane_session_enqueue <session_key> <callback_fn> [args...]
 lane_session_enqueue() {
   local session_key="${1:?session_key required}"
-  local callback="${2:?callback required}"
+  shift
+  local callback="${1:?callback required}"
+  shift
 
   local lock_dir="${BASHCLAW_STATE_DIR:?}/queue/session_locks"
   ensure_dir "$lock_dir"
 
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local lockfile="${lock_dir}/${safe_key}.lock"
 
   # Spin-wait to acquire session lock
@@ -301,9 +304,9 @@ lane_session_enqueue() {
     fi
   done
 
-  # Execute callback, then release lock
+  # Execute callback directly, then release lock
   local result=0
-  eval "$callback" || result=$?
+  "$callback" "$@" || result=$?
 
   rm -f "$lockfile"
   return $result
@@ -312,9 +315,12 @@ lane_session_enqueue() {
 # Layer 2: Global lane enqueue.
 # Enforces per-lane-type concurrency limits.
 # Blocks until a slot is available in the specified lane.
+# Usage: lane_global_enqueue <lane_type> <callback_fn> [args...]
 lane_global_enqueue() {
   local lane_type="${1:?lane_type required}"
-  local callback="${2:?callback required}"
+  shift
+  local callback="${1:?callback required}"
+  shift
 
   local lane_dir="${BASHCLAW_STATE_DIR:?}/queue/global_lanes/${lane_type}"
   ensure_dir "$lane_dir"
@@ -357,9 +363,9 @@ lane_global_enqueue() {
   local slot_file="${lane_dir}/${slot_id}.slot"
   printf '%s' "$$" > "$slot_file"
 
-  # Execute callback, then release slot
+  # Execute callback directly, then release slot
   local result=0
-  eval "$callback" || result=$?
+  "$callback" "$@" || result=$?
 
   rm -f "$slot_file"
   return $result
@@ -400,9 +406,9 @@ lane_dual_enqueue() {
 
   log_debug "lane_dual_enqueue: session=$session_key lane=$lane_type"
 
-  # Wrap callback in global lane, then wrap that in session lock
-  local inner_callback="lane_global_enqueue '$lane_type' '$callback'"
-  lane_session_enqueue "$session_key" "$inner_callback"
+  # Session lock wraps global lane: acquire session lock first,
+  # then acquire a global lane slot, then execute the callback.
+  lane_session_enqueue "$session_key" lane_global_enqueue "$lane_type" "$callback"
 }
 
 # ============================================================================
@@ -420,7 +426,7 @@ queue_mode_resolve() {
   local meta_dir="${BASHCLAW_STATE_DIR:?}/queue/meta"
   ensure_dir "$meta_dir"
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local meta_file="${meta_dir}/${safe_key}.mode"
 
   if [[ -f "$meta_file" ]]; then
@@ -461,7 +467,7 @@ queue_handle_busy() {
   local pending_dir="${BASHCLAW_STATE_DIR:?}/queue/pending"
   ensure_dir "$pending_dir"
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local pending_file="${pending_dir}/${safe_key}.jsonl"
 
   case "$mode" in
@@ -546,7 +552,7 @@ queue_drain_pending() {
 
   local pending_dir="${BASHCLAW_STATE_DIR:?}/queue/pending"
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local pending_file="${pending_dir}/${safe_key}.jsonl"
 
   if [[ ! -f "$pending_file" ]]; then
@@ -571,7 +577,7 @@ queue_check_abort() {
 
   local abort_dir="${BASHCLAW_STATE_DIR:?}/queue/abort"
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local abort_file="${abort_dir}/${safe_key}.abort"
 
   if [[ -f "$abort_file" ]]; then
@@ -587,7 +593,7 @@ queue_is_session_busy() {
 
   local lock_dir="${BASHCLAW_STATE_DIR:?}/queue/session_locks"
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local lockfile="${lock_dir}/${safe_key}.lock"
 
   if [[ -f "$lockfile" ]]; then
@@ -611,7 +617,7 @@ _queue_merge_collected() {
 
   local pending_dir="${BASHCLAW_STATE_DIR:?}/queue/pending"
   local safe_key
-  safe_key="$(printf '%s' "$session_key" | tr -c '[:alnum:]._-' '_' | head -c 200)"
+  safe_key="$(sanitize_key "$session_key")"
   local pending_file="${pending_dir}/${safe_key}.jsonl"
 
   if [[ ! -f "$pending_file" ]]; then
