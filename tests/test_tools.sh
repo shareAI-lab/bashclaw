@@ -111,13 +111,10 @@ teardown_test_env
 
 test_start "tool_shell captures exit codes"
 setup_test_env
-# Note: due to || true in shell execution, exit code capture may return 0
-# Test that the JSON is valid and contains exitCode field
 result="$(tool_shell '{"command":"exit 42"}')"
 assert_json_valid "$result"
 exit_code="$(printf '%s' "$result" | jq -r '.exitCode')"
-# exitCode should be a number (may be 0 due to || true in implementation)
-assert_match "$exit_code" '^[0-9]+$'
+assert_eq "$exit_code" "42"
 teardown_test_env
 
 test_start "tool_shell blocks rm -rf /"
@@ -136,6 +133,14 @@ test_start "tool_shell blocks dd if="
 setup_test_env
 result="$(tool_shell '{"command":"dd if=/dev/zero of=/dev/sda"}' 2>/dev/null)" || true
 assert_contains "$result" "blocked"
+teardown_test_env
+
+test_start "tool_shell returns timeout exit code"
+setup_test_env
+result="$(tool_shell '{"command":"sleep 2","timeout":1}' 2>/dev/null)" || true
+assert_json_valid "$result"
+exit_code="$(printf '%s' "$result" | jq -r '.exitCode')"
+assert_eq "$exit_code" "124"
 teardown_test_env
 
 test_start "tool_shell allows safe commands"

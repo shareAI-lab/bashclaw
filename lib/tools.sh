@@ -744,10 +744,18 @@ tool_shell() {
   fi
 
   local output exit_code
+  local had_errexit=0
+  if [[ "$-" == *e* ]]; then
+    had_errexit=1
+    set +e
+  fi
+
   if is_command_available timeout; then
-    output="$(timeout "$timeout_val" bash -c "$cmd" 2>&1)" || true
+    output="$(timeout "$timeout_val" bash -c "$cmd" 2>&1)"
+    exit_code=$?
   elif is_command_available gtimeout; then
-    output="$(gtimeout "$timeout_val" bash -c "$cmd" 2>&1)" || true
+    output="$(gtimeout "$timeout_val" bash -c "$cmd" 2>&1)"
+    exit_code=$?
   else
     # Pure-bash timeout fallback (macOS/Termux)
     local _tmpout
@@ -761,15 +769,20 @@ tool_shell() {
     done
     if kill -0 "$_pid" 2>/dev/null; then
       kill -9 "$_pid" 2>/dev/null
-      wait "$_pid" 2>/dev/null || true
+      wait "$_pid" 2>/dev/null
       output="[command timed out after ${timeout_val}s]"
+      exit_code=124
     else
-      wait "$_pid" 2>/dev/null || true
+      wait "$_pid" 2>/dev/null
+      exit_code=$?
       output="$(cat "$_tmpout")"
     fi
     rm -f "$_tmpout"
   fi
-  exit_code=$?
+
+  if [[ "$had_errexit" -eq 1 ]]; then
+    set -e
+  fi
 
   # Truncate output to 100KB
   if [ "${#output}" -gt 102400 ]; then
