@@ -319,40 +319,72 @@ TOOLDESC
 }
 
 # Bridge-only tool descriptions for Claude CLI engine.
-# Only includes BashClaw-specific tools that are exposed via MCP, not native-mapped ones.
+# Only includes BashClaw-specific tools that are exposed via CLI bridge, not native-mapped ones.
+# When agent_id is provided, respects allow/deny tool filtering.
 tools_describe_bridge_only() {
-  cat <<'TOOLDESC'
-BashClaw tools (invoke via Bash: bashclaw tool <name> --param value):
+  local agent_id="${1:-}"
 
-1. memory - File-based key-value store for persistent memory.
-   Params: --action (get|set|delete|list|search) --key <string> --value <string> --query <string>
+  local allow_list="[]"
+  local deny_list="[]"
+  if [[ -n "$agent_id" ]]; then
+    local _al _dl
+    _al="$(config_agent_get_raw "$agent_id" '.tools.allow // null' 2>/dev/null)"
+    _dl="$(config_agent_get_raw "$agent_id" '.tools.deny // null' 2>/dev/null)"
+    if [[ -n "$_al" && "$_al" != "null" ]]; then allow_list="$_al"; fi
+    if [[ -n "$_dl" && "$_dl" != "null" ]]; then deny_list="$_dl"; fi
+  fi
 
-2. cron - Manage scheduled jobs.
-   Params: --action (add|remove|list) --id <string> --schedule <string> --command <string>
+  local header="BashClaw tools (invoke via Bash: bashclaw tool <name> --param value):"
+  local descs=""
+  local idx=0
 
-3. message - Send a message via the configured channel handler.
-   Params: --action send --channel <string> --target <string> --message <string>
+  _bridge_tool_desc() {
+    local name="$1" desc="$2"
+    if [[ -n "$agent_id" ]]; then
+      if ! tools_is_available "$name" "$allow_list" "$deny_list" 2>/dev/null; then
+        return
+      fi
+    fi
+    idx=$((idx + 1))
+    descs="${descs}
+${idx}. ${desc}"
+  }
 
-4. agents_list - List all configured agents with their settings.
-   Params: none
+  _bridge_tool_desc "memory" "memory - File-based key-value store for persistent memory.
+   Params: --action (get|set|delete|list|search) --key <string> --value <string> --query <string>"
 
-5. session_status - Query session info for the current agent.
-   Params: --agent_id <string> --channel <string> --sender <string>
+  _bridge_tool_desc "cron" "cron - Manage scheduled jobs.
+   Params: --action (add|remove|list) --id <string> --schedule <string> --command <string>"
 
-6. sessions_list - List all active sessions across all agents.
-   Params: none
+  _bridge_tool_desc "message" "message - Send a message via the configured channel handler.
+   Params: --action send --channel <string> --target <string> --message <string>"
 
-7. agent_message - Send a message to another agent.
-   Params: --target_agent <string> --message <string> --from_agent <string>
+  _bridge_tool_desc "agents_list" "agents_list - List all configured agents with their settings.
+   Params: none"
 
-8. spawn - Spawn a background subagent for long-running tasks.
-   Params: --task <string> --label <string>
+  _bridge_tool_desc "session_status" "session_status - Query session info for the current agent.
+   Params: --agent_id <string> --channel <string> --sender <string>"
 
-9. spawn_status - Check status of a spawned background task.
-   Params: --task_id <string>
+  _bridge_tool_desc "sessions_list" "sessions_list - List all active sessions across all agents.
+   Params: none"
 
-You also have native file, shell, and web tools available directly (Read, Write, Bash, Glob, Grep, WebFetch, WebSearch).
-TOOLDESC
+  _bridge_tool_desc "agent_message" "agent_message - Send a message to another agent.
+   Params: --target_agent <string> --message <string> --from_agent <string>"
+
+  _bridge_tool_desc "spawn" "spawn - Spawn a background subagent for long-running tasks.
+   Params: --task <string> --label <string>"
+
+  _bridge_tool_desc "spawn_status" "spawn_status - Check status of a spawned background task.
+   Params: --task_id <string>"
+
+  local footer="
+You also have native file, shell, and web tools available directly (Read, Write, Bash, Glob, Grep, WebFetch, WebSearch)."
+
+  if [[ -z "$descs" ]]; then
+    printf '%s' "$footer"
+  else
+    printf '%s\n%s\n%s' "$header" "$descs" "$footer"
+  fi
 }
 
 # ---- Tool Spec Builder (Anthropic format) ----

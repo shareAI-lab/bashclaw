@@ -19,7 +19,7 @@ _channel_max_length() {
   esac
 }
 
-# ---- Seven-Level Priority Route Resolution (Gap 7.1) ----
+# ---- Seven-Level Priority Route Resolution ----
 
 routing_resolve_agent() {
   local channel="${1:-default}"
@@ -123,7 +123,7 @@ routing_resolve_agent() {
   printf '%s' "$default_agent"
 }
 
-# ---- DM / Group Policy Resolution (Gap 9.2) ----
+# ---- DM / Group Policy Resolution ----
 
 routing_resolve_dm_policy() {
   local channel="$1"
@@ -362,7 +362,7 @@ routing_split_long_message() {
   done
 }
 
-# ---- Delivery Plan (Gap 7.3) ----
+# ---- Delivery Plan ----
 
 routing_build_delivery_plan() {
   local channel="${1:?channel required}"
@@ -382,7 +382,7 @@ routing_build_delivery_plan() {
     '{channel: $ch, to: $to, threadId: $tid, replyToMessageId: $mid, accountId: $aid}'
 }
 
-# ---- Message Debounce (Gap 7.2) ----
+# ---- Message Debounce ----
 
 routing_debounce() {
   local channel="${1:?channel required}"
@@ -434,7 +434,7 @@ routing_debounce() {
   fi
 }
 
-# ---- Async Dispatch (Gap 7.4) ----
+# ---- Async Dispatch ----
 
 routing_dispatch_async() {
   local channel="${1:-default}"
@@ -505,7 +505,7 @@ routing_dispatch_async() {
     '{status: "accepted", run_id: $rid, accepted_at: $at}'
 }
 
-# ---- Channel Outbound Delivery (Gap 15.1) ----
+# ---- Channel Outbound Delivery ----
 
 routing_deliver() {
   local delivery_plan="$1"
@@ -631,26 +631,6 @@ routing_dispatch() {
   local delivery_plan
   delivery_plan="$(routing_build_delivery_plan "$channel" "$sender" "$thread_id" "$message_id" "$account_id")"
 
-  # Run pre_message hooks
-  local hook_input
-  hook_input="$(jq -nc \
-    --arg ch "$channel" \
-    --arg snd "$sender" \
-    --arg msg "$message" \
-    --arg aid "$agent_id" \
-    --arg tid "$thread_id" \
-    '{channel: $ch, sender: $snd, message: $msg, agent_id: $aid, thread_id: $tid}' 2>/dev/null)"
-
-  local hooked_input
-  hooked_input="$(hooks_run "pre_message" "$hook_input" 2>/dev/null)" || true
-  if [[ -n "$hooked_input" ]]; then
-    local hooked_msg
-    hooked_msg="$(printf '%s' "$hooked_input" | jq -r '.message // empty' 2>/dev/null)"
-    if [[ -n "$hooked_msg" ]]; then
-      message="$hooked_msg"
-    fi
-  fi
-
   local response
   response="$(engine_run "$agent_id" "$message" "$channel" "$sender")"
 
@@ -659,17 +639,6 @@ routing_dispatch() {
     printf ''
     return 1
   fi
-
-  # Run post_message hooks
-  local post_hook_input
-  post_hook_input="$(jq -nc \
-    --arg ch "$channel" \
-    --arg snd "$sender" \
-    --arg msg "$message" \
-    --arg resp "$response" \
-    --arg aid "$agent_id" \
-    '{channel: $ch, sender: $snd, message: $msg, response: $resp, agent_id: $aid}' 2>/dev/null)"
-  hooks_run "post_message" "$post_hook_input" >/dev/null 2>&1 || true
 
   # Security: audit log response
   security_audit_log "message_responded" "channel=$channel sender=$sender agent=$agent_id"

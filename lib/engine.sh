@@ -49,19 +49,53 @@ engine_run() {
   engine="$(engine_resolve "$agent_id")"
   log_debug "engine_run: agent=$agent_id engine=$engine"
 
+  # before_agent_start hook
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "before_agent_start" "$(jq -nc --arg aid "$agent_id" --arg eng "$engine" --arg ch "$channel" \
+      '{agent_id: $aid, engine: $eng, channel: $ch}' 2>/dev/null)" 2>/dev/null || true
+  fi
+
+  # pre_message hook (modifying: can alter message)
+  if declare -f hooks_run &>/dev/null; then
+    local hook_input
+    hook_input="$(jq -nc --arg aid "$agent_id" --arg ch "$channel" --arg msg "$message" \
+      '{agent_id: $aid, channel: $ch, message: $msg}' 2>/dev/null)"
+    hook_input="$(hooks_run "pre_message" "$hook_input" 2>/dev/null)" || true
+    local modified_msg
+    modified_msg="$(printf '%s' "$hook_input" | jq -r '.message // empty' 2>/dev/null)"
+    if [[ -n "$modified_msg" ]]; then
+      message="$modified_msg"
+    fi
+  fi
+
+  local response=""
   case "$engine" in
     claude)
       if declare -f engine_claude_run &>/dev/null; then
-        engine_claude_run "$agent_id" "$message" "$channel" "$sender"
+        response="$(engine_claude_run "$agent_id" "$message" "$channel" "$sender" "$is_subagent")"
       else
         log_warn "Claude engine not available, falling back to builtin"
-        agent_run "$agent_id" "$message" "$channel" "$sender" "$is_subagent"
+        response="$(agent_run "$agent_id" "$message" "$channel" "$sender" "$is_subagent")"
       fi
       ;;
     builtin|*)
-      agent_run "$agent_id" "$message" "$channel" "$sender" "$is_subagent"
+      response="$(agent_run "$agent_id" "$message" "$channel" "$sender" "$is_subagent")"
       ;;
   esac
+
+  # post_message hook
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "post_message" "$(jq -nc --arg aid "$agent_id" --arg ch "$channel" --arg resp "${response:0:500}" \
+      '{agent_id: $aid, channel: $ch, response: $resp}' 2>/dev/null)" 2>/dev/null || true
+  fi
+
+  # agent_end hook
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "agent_end" "$(jq -nc --arg aid "$agent_id" --arg eng "$engine" --arg ch "$channel" \
+      '{agent_id: $aid, engine: $eng, channel: $ch}' 2>/dev/null)" 2>/dev/null || true
+  fi
+
+  printf '%s' "$response"
 }
 
 # Return JSON info about detected engines

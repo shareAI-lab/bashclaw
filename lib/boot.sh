@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Boot automation module for bashclaw
 # Parses BOOT.md files and executes startup instructions
-# Extended with agent workspace integration (Gap 13.1)
 
-# ---- Agent Workspace Boot Discovery (Gap 13.1) ----
+# ---- Agent Workspace Boot Discovery ----
 
 # Find BOOT.md for a specific agent in the standard workspace location
 boot_find() {

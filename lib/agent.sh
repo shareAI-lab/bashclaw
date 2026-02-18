@@ -69,19 +69,19 @@ agent_build_tools_spec() {
   # Check for profile-based tool filtering
   local profile
   profile="$(config_agent_get_raw "$agent_id" '.tools.profile' 2>/dev/null)"
-  if [[ -z "$profile" || "$profile" == "null" ]]; then
+  if is_jq_empty "$profile"; then
     profile=""
   fi
 
   # Check for allow/deny lists
   local allow_list
   allow_list="$(config_agent_get_raw "$agent_id" '.tools.allow' 2>/dev/null)"
-  if [[ -z "$allow_list" || "$allow_list" == "null" ]]; then
+  if is_jq_empty "$allow_list"; then
     allow_list="[]"
   fi
   local deny_list
   deny_list="$(config_agent_get_raw "$agent_id" '.tools.deny' 2>/dev/null)"
-  if [[ -z "$deny_list" || "$deny_list" == "null" ]]; then
+  if is_jq_empty "$deny_list"; then
     deny_list="[]"
   fi
 
@@ -139,7 +139,7 @@ agent_estimate_tokens() {
   fi
 
   local char_count
-  char_count="$(wc -c < "$session_file" | tr -d ' ')"
+  char_count="$(wc -c < "$session_file" )"
   printf '%d' $((char_count / 4))
 }
 
@@ -309,6 +309,14 @@ agent_run() {
 
   session_meta_load "$sess_file" >/dev/null 2>&1
 
+  # session_start hook for new sessions
+  if [[ ! -f "$sess_file" || "$(wc -l < "$sess_file" 2>/dev/null )" == "0" ]]; then
+    if declare -f hooks_run &>/dev/null; then
+      hooks_run "session_start" "$(jq -nc --arg aid "$agent_id" --arg ch "$channel" \
+        '{agent_id: $aid, channel: $ch, engine: "builtin"}' 2>/dev/null)" 2>/dev/null || true
+    fi
+  fi
+
   if [[ "$is_subagent" != "true" ]] && agent_should_memory_flush "$sess_file" "$context_window"; then
     agent_run_memory_flush "$agent_id" "$sess_file"
   fi
@@ -326,14 +334,17 @@ agent_run() {
   local compaction_retries=0
   local current_model="$model"
 
-  while [ "$iteration" -lt "$AGENT_MAX_TOOL_ITERATIONS" ]; do
+  local max_turns
+  max_turns="$(config_agent_get "$agent_id" "maxTurns" "$AGENT_MAX_TOOL_ITERATIONS")"
+
+  while [ "$iteration" -lt "$max_turns" ]; do
     iteration=$((iteration + 1))
 
     # Auto-compaction check before building messages
     if session_check_compaction "$sess_file" "$agent_id"; then
       local compaction_mode
       compaction_mode="$(config_agent_get_raw "$agent_id" '.compaction.mode' 2>/dev/null)"
-      if [[ -z "$compaction_mode" || "$compaction_mode" == "null" ]]; then
+      if is_jq_empty "$compaction_mode"; then
         compaction_mode="summary"
       fi
       log_info "Auto-compaction triggered for agent=$agent_id mode=$compaction_mode"
@@ -490,8 +501,8 @@ agent_run() {
     break
   done
 
-  if [ "$iteration" -ge "$AGENT_MAX_TOOL_ITERATIONS" ]; then
-    log_warn "Agent reached max tool iterations ($AGENT_MAX_TOOL_ITERATIONS)"
+  if [ "$iteration" -ge "$max_turns" ]; then
+    log_warn "Agent reached max tool iterations ($max_turns)"
   fi
 
   local max_history_val

@@ -427,11 +427,7 @@ gateway_health_monitor() {
 
     # Check disk space
     local disk_usage
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-      disk_usage="$(df -h "${BASHCLAW_STATE_DIR}" | tail -1 | awk '{print $5}' | tr -d '%')"
-    else
-      disk_usage="$(df -h "${BASHCLAW_STATE_DIR}" | tail -1 | awk '{print $5}' | tr -d '%')"
-    fi
+    disk_usage="$(df -h "${BASHCLAW_STATE_DIR}" | tail -1 | awk '{print $5}' | tr -d '%')"
 
     if [[ -n "$disk_usage" ]] && (( disk_usage > 90 )); then
       log_warn "Disk usage is ${disk_usage}% - consider cleaning up state directory"

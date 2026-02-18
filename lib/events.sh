@@ -68,7 +68,7 @@ events_enqueue() {
   # Enforce max capacity (FIFO: drop oldest)
   if [[ -f "$file" ]]; then
     local total
-    total="$(wc -l < "$file" | tr -d ' ')"
+    total="$(wc -l < "$file" )"
     if (( total > EVENTS_MAX_PER_SESSION )); then
       local tmp
       tmp="$(tmpfile "events_trim")"

@@ -673,7 +673,31 @@ cmd_tool() {
     fi
   fi
 
-  tool_execute "$tool_name" "$tool_input"
+  # Fire pre_tool hook (parity with builtin engine's per-tool hooks)
+  if declare -f hooks_run &>/dev/null; then
+    local hook_data
+    hook_data="$(jq -nc --arg tn "$tool_name" --arg ti "$tool_input" \
+      '{tool_name: $tn, tool_input: $ti}' 2>/dev/null)" || hook_data="{}"
+    hook_data="$(hooks_run "pre_tool" "$hook_data" 2>/dev/null)" || true
+    local modified_input
+    modified_input="$(printf '%s' "$hook_data" | jq -r '.tool_input // empty' 2>/dev/null)"
+    if [[ -n "$modified_input" && "$modified_input" != "null" ]]; then
+      tool_input="$modified_input"
+    fi
+  fi
+
+  local result
+  result="$(tool_execute "$tool_name" "$tool_input")"
+  local rc=$?
+
+  # Fire post_tool hook
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "post_tool" "$(jq -nc --arg tn "$tool_name" --arg res "${result:0:500}" \
+      '{tool_name: $tn, result: $res}' 2>/dev/null)" 2>/dev/null || true
+  fi
+
+  printf '%s' "$result"
+  return $rc
 }
 
 # Parse --key value pairs into JSON object
@@ -713,6 +737,110 @@ _tool_parse_flags() {
 }
 
 # MCP server mode - exposes all BashClaw tools as MCP server via stdio
+# Usage: bashclaw hooks-bridge <event_type>
+# Called by Claude Code CLI as hook command. Bridges Claude Code hook events
+# to BashClaw's hook system. Reads hook JSON from stdin, outputs JSON to stdout.
+# Exit code 0 = proceed, 2 = block.
+cmd_hooks_bridge() {
+  local event_type="${1:-}"
+  if [[ -z "$event_type" ]]; then
+    printf '{}' >&2
+    return 0
+  fi
+
+  # Load config
+  local cfg_file
+  cfg_file="$(config_path 2>/dev/null)"
+  if [[ -f "$cfg_file" ]]; then
+    _CONFIG_CACHE=""
+    config_load 2>/dev/null || true
+  fi
+
+  # Read Claude Code hook JSON from stdin
+  local input=""
+  if [[ ! -t 0 ]]; then
+    input="$(cat)"
+  fi
+  if [[ -z "$input" ]]; then
+    input="{}"
+  fi
+
+  case "$event_type" in
+    pre_compact)
+      _hooks_bridge_pre_compact "$input"
+      ;;
+    post_tool_use)
+      _hooks_bridge_post_tool_use "$input"
+      ;;
+    *)
+      printf '{}'
+      ;;
+  esac
+}
+
+# PreCompact: flush memory to disk before Claude CLI compacts context
+_hooks_bridge_pre_compact() {
+  local input="$1"
+
+  # Fire BashClaw's before_compaction hook
+  if declare -f hooks_run &>/dev/null; then
+    hooks_run "before_compaction" "$input" 2>/dev/null || true
+  fi
+
+  # Trigger memory flush if memory tool is available
+  if declare -f tool_memory &>/dev/null; then
+    local today
+    today="$(date '+%Y-%m-%d')"
+    local flush_keys
+    flush_keys="$(tool_memory '{"action":"list"}' 2>/dev/null)" || true
+    if [[ -n "$flush_keys" ]]; then
+      log_info "hooks_bridge: pre_compact memory flush triggered"
+    fi
+  fi
+
+  # Return additionalContext to tell Claude to save important info
+  local additional="Context is about to be compacted. If you have important intermediate state or findings, save them to memory now using bashclaw tool memory --action set before they are lost."
+  printf '{"hookSpecificOutput":{"hookEventName":"PreCompact","additionalContext":"%s"}}' "$additional"
+}
+
+# PostToolUse: inject reflection prompt after tool execution
+_hooks_bridge_post_tool_use() {
+  local input="$1"
+
+  # Fire BashClaw's post_tool hook (for Claude CLI native tools: Read, Write, Bash, etc.)
+  local tool_name
+  tool_name="$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null)"
+  if [[ -n "$tool_name" ]] && declare -f hooks_run &>/dev/null; then
+    local tool_response
+    tool_response="$(printf '%s' "$input" | jq -r '.tool_response // empty' 2>/dev/null)"
+    hooks_run "post_tool" "$(jq -nc --arg tn "$tool_name" --arg res "${tool_response:0:500}" \
+      '{tool_name: $tn, result: $res}' 2>/dev/null)" 2>/dev/null || true
+  fi
+
+  # Check if reflection prompts are enabled
+  local reflection_disabled
+  reflection_disabled="$(config_get '.agents.defaults.reflectionPrompt' '' 2>/dev/null)"
+  if [[ "$reflection_disabled" == "false" ]]; then
+    printf '{}'
+    return
+  fi
+
+  # Get custom or default reflection prompt
+  local reflection
+  reflection="$(config_get '.agents.defaults.reflectionPrompt' '')"
+  if [[ -z "$reflection" ]]; then
+    reflection="Analyze the tool result. If the task is complete, provide a final response. If not, decide the next action."
+  fi
+
+  # Escape for JSON
+  local escaped_reflection
+  escaped_reflection="$(printf '%s' "$reflection" | jq -Rs '.' 2>/dev/null)"
+  # Remove surrounding quotes from jq output
+  escaped_reflection="${escaped_reflection:1:${#escaped_reflection}-2}"
+
+  printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}' "$escaped_reflection"
+}
+
 # Usage: bashclaw mcp-serve
 cmd_mcp_serve() {
   local mcp_server="${BASHCLAW_ROOT}/mcp/server.sh"
@@ -733,7 +861,7 @@ cmd_mcp_serve() {
 
 _suggest_command() {
   local input="$1"
-  local known_cmds="agent message msg config cfg session sess memory mem doctor gateway daemon cron hook security sec plugin skill onboard setup status selftest tool mcp-serve version help update"
+  local known_cmds="agent message msg config cfg session sess memory mem doctor gateway daemon cron hook security sec plugin skill onboard setup status selftest tool mcp-serve hooks-bridge version help update"
   local best_match=""
 
   if [[ "${#input}" -lt 2 ]]; then
@@ -841,6 +969,9 @@ main() {
       ;;
     mcp-serve)
       cmd_mcp_serve
+      ;;
+    hooks-bridge)
+      cmd_hooks_bridge "$@"
       ;;
     update)
       cmd_update

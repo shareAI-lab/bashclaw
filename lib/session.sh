@@ -311,7 +311,7 @@ session_prune() {
   fi
 
   local total
-  total="$(wc -l < "$file" | tr -d ' ')"
+  total="$(wc -l < "$file" )"
   if (( total <= keep )); then
     return 0
   fi
@@ -338,7 +338,7 @@ session_list() {
   while IFS= read -r -d '' f; do
     local relative="${f#${base_dir}/}"
     local count
-    count="$(wc -l < "$f" | tr -d ' ')"
+    count="$(wc -l < "$f" )"
     ndjson="${ndjson}$(jq -nc --arg p "$relative" --argjson c "$count" \
       '{"path": $p, "count": $c}')"$'\n'
   done < <(find "$base_dir" -name '*.jsonl' -print0 2>/dev/null)
@@ -424,7 +424,7 @@ session_count() {
     return 0
   fi
   local total
-  total="$(wc -l < "$file" | tr -d ' ')"
+  total="$(wc -l < "$file" )"
   # Subtract the header line if present
   if [[ "$total" -gt 0 ]]; then
     local first_line
@@ -559,7 +559,7 @@ session_estimate_tokens() {
   fi
 
   local char_count
-  char_count="$(wc -c < "$session_file" | tr -d ' ')"
+  char_count="$(wc -c < "$session_file" )"
   printf '%d' $((char_count / 4))
 }
 
@@ -653,7 +653,7 @@ session_compact() {
   require_command jq "session_compact requires jq"
 
   local total_lines
-  total_lines="$(wc -l < "$session_file" | tr -d ' ')"
+  total_lines="$(wc -l < "$session_file" )"
   if (( total_lines <= 10 )); then
     log_debug "Session too short to compact ($total_lines lines)"
     return 1
@@ -669,7 +669,7 @@ session_compact() {
   if [[ "$mode" == "truncate" ]]; then
     # Truncate mode: keep only the last N messages that fit within the reserve budget
     local current_chars
-    current_chars="$(wc -c < "$session_file" | tr -d ' ')"
+    current_chars="$(wc -c < "$session_file" )"
     local target_chars=$((reserve_tokens * 4))
 
     if (( current_chars <= target_chars )); then
@@ -684,7 +684,7 @@ session_compact() {
     while (( keep_lines > 6 )); do
       tail -n "$keep_lines" "$session_file" > "$tmp"
       local probe_chars
-      probe_chars="$(wc -c < "$tmp" | tr -d ' ')"
+      probe_chars="$(wc -c < "$tmp" )"
       if (( probe_chars <= target_chars )); then
         break
       fi

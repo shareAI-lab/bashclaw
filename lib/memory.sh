@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Long-term memory module for bashclaw
 # File-based key-value store with tags, sources, and access tracking
-# Extended with workspace memory, daily logs, BM25-style search (Gap 2.5)
+# Includes workspace memory, daily logs, BM25-style search
 
 # Returns the memory storage directory
 memory_dir() {
@@ -15,7 +15,7 @@ _memory_key_to_filename() {
   sanitize_key "$1"
 }
 
-# ---- Workspace Memory (Gap 2.5) ----
+# ---- Workspace Memory ----
 
 # Ensure the agent workspace memory directory exists
 memory_ensure_workspace() {
@@ -145,7 +145,7 @@ memory_get() {
   printf '%s' "$content" | jq -r '.value'
 }
 
-# ---- BM25-Style Search (Gap 2.5) ----
+# ---- BM25-Style Search ----
 
 # Search across all memory files with relevance scoring
 # Returns matching entries as JSON with scores

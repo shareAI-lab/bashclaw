@@ -416,7 +416,7 @@ ${identity_section}"
   # [3] Tool availability summary
   local tool_desc
   if [[ "$engine_type" == "claude" ]]; then
-    tool_desc="$(tools_describe_bridge_only)"
+    tool_desc="$(tools_describe_bridge_only "$agent_id")"
   else
     tool_desc="$(tools_describe_all)"
   fi

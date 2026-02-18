@@ -3,6 +3,11 @@
 
 _TMPFILES=()
 
+# Check if a jq-extracted value is effectively empty
+is_jq_empty() {
+  [[ -z "$1" || "$1" == "null" || "$1" == "[]" || "$1" == "{}" ]]
+}
+
 ensure_dir() {
   local dir="$1"
   [[ -d "$dir" ]] || mkdir -p "$dir"

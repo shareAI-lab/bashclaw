@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Security module for bashclaw
 # Audit logging, pairing codes, rate limiting, exec approval,
-# tool policy, elevated policy, command auth (Gaps 9.1, 9.2, 9.3)
+# tool policy, elevated policy, command auth
 
 # Timing-safe string comparison using HMAC.
 # Compares two strings in constant time to prevent timing side-channel attacks.
@@ -219,7 +219,7 @@ security_exec_approval() {
   esac
 }
 
-# ---- Tool Policy Check (Gap 9.1) ----
+# ---- Tool Policy Check ----
 # Check if a tool is allowed for the given agent and session type
 # Returns 0 if allowed, 1 if denied
 security_tool_policy_check() {
@@ -287,7 +287,7 @@ security_tool_policy_check() {
   return 0
 }
 
-# ---- Elevated Policy Check (Gap 9.1) ----
+# ---- Elevated Policy Check ----
 # For tools/operations requiring elevated authorization
 # Returns "approved", "needs_approval", or "blocked"
 security_elevated_check() {
@@ -329,7 +329,7 @@ security_elevated_check() {
   esac
 }
 
-# ---- Command Authorization Check (Gap 9.3) ----
+# ---- Command Authorization Check ----
 # Check if a sender is authorized to execute a named command
 # Returns 0 if authorized, 1 if not
 security_command_auth_check() {
