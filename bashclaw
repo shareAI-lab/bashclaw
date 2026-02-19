@@ -2,7 +2,21 @@
 set -euo pipefail
 
 BASHCLAW_VERSION="1.0.0"
-BASHCLAW_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve symlinks to find the real script location
+_bashclaw_resolve_root() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -L "$source" ]]; do
+    local dir
+    dir="$(cd "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    # Resolve relative symlink
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  cd "$(dirname "$source")" && pwd
+}
+BASHCLAW_ROOT="$(_bashclaw_resolve_root)"
+unset -f _bashclaw_resolve_root
 BASHCLAW_STATE_DIR="${BASHCLAW_STATE_DIR:-${HOME}/.bashclaw}"
 
 export BASHCLAW_VERSION BASHCLAW_ROOT BASHCLAW_STATE_DIR
