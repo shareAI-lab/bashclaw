@@ -174,28 +174,54 @@ else
 fi
 teardown_test_env
 
-# ---- _add_to_path with dir already in PATH is a no-op ----
+# ---- _install_command with existing bashclaw in PATH is a no-op ----
 
-test_start "_add_to_path with dir already in PATH is a no-op"
+test_start "_install_command with existing bashclaw in PATH is a no-op"
 setup_test_env
 test_dir="${_TEST_TMPDIR}/alreadyhere"
 mkdir -p "$test_dir"
+printf '#!/bin/bash\necho test\n' > "$test_dir/bashclaw"
+chmod +x "$test_dir/bashclaw"
 export PATH="${test_dir}:$PATH"
 export HOME="$_TEST_TMPDIR"
 (
   _source_install_functions
   _NO_PATH=false
-  before_path="$PATH"
-  _add_to_path "$test_dir" 2>/dev/null
-  after_path="$PATH"
-  if [[ "$before_path" == "$after_path" ]]; then
+  _install_command "$test_dir" 2>/dev/null
+  # Should report already in PATH without creating symlinks
+  if [[ ! -L /usr/local/bin/bashclaw ]] && [[ ! -L "${_TEST_TMPDIR}/.local/bin/bashclaw" ]]; then
     exit 0
   else
     exit 1
   fi
 )
 rc=$?
-assert_eq "$rc" "0" "_add_to_path should be a no-op when dir is already in PATH"
+assert_eq "$rc" "0" "_install_command should be a no-op when bashclaw is already in PATH"
+teardown_test_env
+
+# ---- _install_command creates symlink in ~/.local/bin ----
+
+test_start "_install_command creates symlink in ~/.local/bin"
+setup_test_env
+test_dir="${_TEST_TMPDIR}/install_bin"
+mkdir -p "$test_dir"
+printf '#!/bin/bash\necho test\n' > "$test_dir/bashclaw"
+chmod +x "$test_dir/bashclaw"
+export HOME="$_TEST_TMPDIR"
+(
+  # Remove bashclaw from PATH so it needs to create a symlink
+  export PATH="/usr/bin:/bin"
+  _source_install_functions
+  _NO_PATH=false
+  _install_command "$test_dir" 2>/dev/null
+  if [[ -L "${HOME}/.local/bin/bashclaw" ]]; then
+    exit 0
+  else
+    exit 1
+  fi
+)
+rc=$?
+assert_eq "$rc" "0" "_install_command should create symlink at ~/.local/bin/bashclaw"
 teardown_test_env
 
 report_results

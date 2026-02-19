@@ -21,8 +21,8 @@
   <a href="#快速开始">快速开始</a> &middot;
   <a href="#特性">特性</a> &middot;
   <a href="#web-控制台">控制台</a> &middot;
-  <a href="#模型提供者">提供者</a> &middot;
   <a href="#执行引擎">引擎</a> &middot;
+  <a href="#模型提供者">提供者</a> &middot;
   <a href="#消息频道">频道</a> &middot;
   <a href="#架构">架构</a> &middot;
   <a href="README.md">English</a>
@@ -221,6 +221,144 @@ PUT  /api/env           保存 API 密钥
 
 </details>
 
+## 执行引擎
+
+BashClaw 具有可插拔的引擎层,决定智能体任务如何执行。每个智能体可以使用不同的引擎。
+
+### Claude 引擎 (推荐)
+
+**claude** 引擎将执行委托给 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)。直接复用你的 Claude 订阅 -- 无需 API 密钥,无按量付费。
+
+```sh
+# 设置 claude 为默认引擎
+bashclaw config set '.agents.defaults.engine' '"claude"'
+
+# 使用
+bashclaw agent -m "重构这个函数以提高可读性"
+```
+
+**工作方式:**
+- 调用 `claude -p --output-format json` 作为子进程
+- Claude Code 使用原生工具 (Read、Write、Bash、Glob、Grep 等) 处理工具循环
+- BashClaw 特有的工具 (memory、cron、spawn、agent_message) 通过 `bashclaw tool <name>` CLI 调用桥接
+- 会话状态同时保存在 BashClaw JSONL 和 Claude Code 原生会话中
+- 钩子通过 `--settings` JSON 注入桥接
+
+**前置要求:** 已安装 `claude` CLI 并完成认证 (`claude login`)。
+
+<details>
+<summary><strong>Claude 引擎配置</strong></summary>
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "engine": "claude",
+      "maxTurns": 50
+    },
+    "list": [
+      {
+        "id": "coder",
+        "engine": "claude",
+        "engineModel": "opus",
+        "maxTurns": 30
+      }
+    ]
+  }
+}
+```
+
+| 配置字段 | 说明 |
+|---------|------|
+| `engine` | `"claude"` 使用 Claude Code CLI |
+| `engineModel` | 覆盖模型 (如 `"opus"`, `"sonnet"`, `"haiku"`)。为空时使用订阅默认模型。 |
+| `maxTurns` | 每次调用的最大推理轮数 |
+
+| 环境变量 | 默认值 | 用途 |
+|---------|--------|------|
+| `ENGINE_CLAUDE_TIMEOUT` | `300` | Claude CLI 执行超时 (秒) |
+| `ENGINE_CLAUDE_MODEL` | -- | 覆盖模型 (配置中 `engineModel` 的替代方式) |
+
+</details>
+
+### Builtin 引擎
+
+**builtin** 引擎通过 curl 直接调用 LLM API。支持 18 个提供者和 25+ 预配置模型,并兼容任何 OpenAI 兼容端点。
+
+```sh
+# builtin 是默认引擎 (无需额外配置)
+export ANTHROPIC_API_KEY="sk-ant-..."
+bashclaw agent -m "hello"
+```
+
+**工作方式:**
+- 直接调用提供者 API (Anthropic、OpenAI、Google 等 18 个)
+- 运行 BashClaw 自身的工具循环 (迭代次数通过 `maxTurns` 配置)
+- 自动处理上下文溢出: 压缩 -> 模型降级 -> 会话重置
+- 三种 API 格式: Anthropic (`/v1/messages`)、OpenAI 兼容 (`/v1/chat/completions`)、Google (`/v1beta/.../generateContent`)
+
+### Auto 引擎
+
+设置 `engine` 为 `"auto"` 让 BashClaw 自动检测: 如果安装了 `claude` CLI 则使用 claude 引擎,否则回退到 builtin。
+
+```sh
+bashclaw config set '.agents.defaults.engine' '"auto"'
+```
+
+### 工具映射 (Claude 引擎)
+
+使用 Claude 引擎时,BashClaw 工具尽可能映射到 Claude Code 原生工具。没有原生对应的工具通过 CLI 桥接:
+
+| BashClaw 工具 | Claude Code 工具 | 方式 |
+|--------------|-----------------|------|
+| `web_fetch` | WebFetch | 原生映射 |
+| `web_search` | WebSearch | 原生映射 |
+| `shell` | Bash | 原生映射 |
+| `read_file` | Read | 原生映射 |
+| `write_file` | Write | 原生映射 |
+| `list_files` | Glob | 原生映射 |
+| `file_search` | Grep | 原生映射 |
+| `memory` | -- | `bashclaw tool memory` |
+| `cron` | -- | `bashclaw tool cron` |
+| `agent_message` | -- | `bashclaw tool agent_message` |
+| `spawn` | -- | `bashclaw tool spawn` |
+
+### 混合引擎配置
+
+不同的智能体可以使用不同的引擎:
+
+```json
+{
+  "agents": {
+    "defaults": { "engine": "claude" },
+    "list": [
+      {
+        "id": "coder",
+        "engine": "claude",
+        "engineModel": "opus"
+      },
+      {
+        "id": "chat",
+        "engine": "builtin",
+        "model": "gpt-4o"
+      },
+      {
+        "id": "local",
+        "engine": "builtin",
+        "model": "llama-3.3-70b-versatile"
+      }
+    ]
+  }
+}
+```
+
+**两个引擎共享:**
+- 生命周期钩子 (before_agent_start, pre_message, post_message, agent_end)
+- 会话持久化 (JSONL)
+- 工作区加载 (SOUL.md, MEMORY.md, BOOT.md, IDENTITY.md)
+- 安全层 (限流、工具策略、RBAC)
+- 配置格式 (`maxTurns`、工具允许/拒绝列表、工具配置文件)
+
 ## 模型提供者
 
 Builtin 引擎支持 18 个提供者,基于数据驱动路由。所有配置在 `lib/models.json` 中 -- 添加提供者只需一个 JSON 条目,无需修改代码。
@@ -371,144 +509,6 @@ Builtin 引擎支持三种 API 格式。大多数提供者使用 OpenAI 兼容�
 | **Google** | `POST /v1beta/models/{model}:generateContent` | Google |
 
 任何实现了上述格式之一的服务都可以直接使用。
-
-## 执行引擎
-
-BashClaw 具有可插拔的引擎层,决定智能体任务如何执行。每个智能体可以使用不同的引擎。
-
-### Claude 引擎 (推荐)
-
-**claude** 引擎将执行委托给 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)。直接复用你的 Claude 订阅 -- 无需 API 密钥,无按量付费。
-
-```sh
-# 设置 claude 为默认引擎
-bashclaw config set '.agents.defaults.engine' '"claude"'
-
-# 使用
-bashclaw agent -m "重构这个函数以提高可读性"
-```
-
-**工作方式:**
-- 调用 `claude -p --output-format json` 作为子进程
-- Claude Code 使用原生工具 (Read、Write、Bash、Glob、Grep 等) 处理工具循环
-- BashClaw 特有的工具 (memory、cron、spawn、agent_message) 通过 `bashclaw tool <name>` CLI 调用桥接
-- 会话状态同时保存在 BashClaw JSONL 和 Claude Code 原生会话中
-- 钩子通过 `--settings` JSON 注入桥接
-
-**前置要求:** 已安装 `claude` CLI 并完成认证 (`claude login`)。
-
-<details>
-<summary><strong>Claude 引擎配置</strong></summary>
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "engine": "claude",
-      "maxTurns": 50
-    },
-    "list": [
-      {
-        "id": "coder",
-        "engine": "claude",
-        "engineModel": "opus",
-        "maxTurns": 30
-      }
-    ]
-  }
-}
-```
-
-| 配置字段 | 说明 |
-|---------|------|
-| `engine` | `"claude"` 使用 Claude Code CLI |
-| `engineModel` | 覆盖模型 (如 `"opus"`, `"sonnet"`, `"haiku"`)。为空时使用订阅默认模型。 |
-| `maxTurns` | 每次调用的最大推理轮数 |
-
-| 环境变量 | 默认值 | 用途 |
-|---------|--------|------|
-| `ENGINE_CLAUDE_TIMEOUT` | `300` | Claude CLI 执行超时 (秒) |
-| `ENGINE_CLAUDE_MODEL` | -- | 覆盖模型 (配置中 `engineModel` 的替代方式) |
-
-</details>
-
-### Builtin 引擎
-
-**builtin** 引擎通过 curl 直接调用 LLM API。支持 18 个提供者和 25+ 预配置模型,并兼容任何 OpenAI 兼容端点。
-
-```sh
-# builtin 是默认引擎 (无需额外配置)
-export ANTHROPIC_API_KEY="sk-ant-..."
-bashclaw agent -m "hello"
-```
-
-**工作方式:**
-- 直接调用提供者 API (Anthropic、OpenAI、Google 等 18 个)
-- 运行 BashClaw 自身的工具循环 (迭代次数通过 `maxTurns` 配置)
-- 自动处理上下文溢出: 压缩 -> 模型降级 -> 会话重置
-- 三种 API 格式: Anthropic (`/v1/messages`)、OpenAI 兼容 (`/v1/chat/completions`)、Google (`/v1beta/.../generateContent`)
-
-### Auto 引擎
-
-设置 `engine` 为 `"auto"` 让 BashClaw 自动检测: 如果安装了 `claude` CLI 则使用 claude 引擎,否则回退到 builtin。
-
-```sh
-bashclaw config set '.agents.defaults.engine' '"auto"'
-```
-
-### 工具映射 (Claude 引擎)
-
-使用 Claude 引擎时,BashClaw 工具尽可能映射到 Claude Code 原生工具。没有原生对应的工具通过 CLI 桥接:
-
-| BashClaw 工具 | Claude Code 工具 | 方式 |
-|--------------|-----------------|------|
-| `web_fetch` | WebFetch | 原生映射 |
-| `web_search` | WebSearch | 原生映射 |
-| `shell` | Bash | 原生映射 |
-| `read_file` | Read | 原生映射 |
-| `write_file` | Write | 原生映射 |
-| `list_files` | Glob | 原生映射 |
-| `file_search` | Grep | 原生映射 |
-| `memory` | -- | `bashclaw tool memory` |
-| `cron` | -- | `bashclaw tool cron` |
-| `agent_message` | -- | `bashclaw tool agent_message` |
-| `spawn` | -- | `bashclaw tool spawn` |
-
-### 混合引擎配置
-
-不同的智能体可以使用不同的引擎:
-
-```json
-{
-  "agents": {
-    "defaults": { "engine": "claude" },
-    "list": [
-      {
-        "id": "coder",
-        "engine": "claude",
-        "engineModel": "opus"
-      },
-      {
-        "id": "chat",
-        "engine": "builtin",
-        "model": "gpt-4o"
-      },
-      {
-        "id": "local",
-        "engine": "builtin",
-        "model": "llama-3.3-70b-versatile"
-      }
-    ]
-  }
-}
-```
-
-**两个引擎共享:**
-- 生命周期钩子 (before_agent_start, pre_message, post_message, agent_end)
-- 会话持久化 (JSONL)
-- 工作区加载 (SOUL.md, MEMORY.md, BOOT.md, IDENTITY.md)
-- 安全层 (限流、工具策略、RBAC)
-- 配置格式 (`maxTurns`、工具允许/拒绝列表、工具配置文件)
 
 ## 消息频道
 
@@ -676,7 +676,7 @@ bashclaw/
   tools/                # 外部工具脚本
   tests/
     framework.sh        # 测试框架
-    test_*.sh           # 23 个测试套件, 334 个测试
+    test_*.sh           # 测试套件
 ```
 
 ## 命令
@@ -777,6 +777,7 @@ plugin_register_provider "my_llm" "My LLM" '["model-a"]' '{"envKey":"MY_KEY"}'
 {
   "agents": {
     "defaults": {
+      "engine": "auto",
       "model": "claude-opus-4-6",
       "maxTurns": 50,
       "contextTokens": 200000,

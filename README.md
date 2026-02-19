@@ -21,8 +21,8 @@ Pure-shell AI agent runtime. No Node.js, no Python, no compiled binaries.
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#features">Features</a> &middot;
   <a href="#web-dashboard">Dashboard</a> &middot;
-  <a href="#providers">Providers</a> &middot;
   <a href="#engines">Engines</a> &middot;
+  <a href="#providers">Providers</a> &middot;
   <a href="#channels">Channels</a> &middot;
   <a href="#architecture">Architecture</a> &middot;
   <a href="README_CN.md">&#x4E2D;&#x6587;</a>
@@ -224,6 +224,144 @@ PUT  /api/env           Save API keys
 
 </details>
 
+## Engines
+
+BashClaw has a pluggable engine layer that determines how agent tasks are executed. Each agent can use a different engine.
+
+### Claude Engine (Recommended)
+
+The **claude** engine delegates execution to [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code). It reuses your existing Claude subscription -- no API keys needed, no per-token cost.
+
+```sh
+# Set claude as the default engine
+bashclaw config set '.agents.defaults.engine' '"claude"'
+
+# Use it
+bashclaw agent -m "Refactor this function for readability"
+```
+
+**How it works:**
+- Invokes `claude -p --output-format json` as a subprocess
+- Claude Code handles the tool loop with its native tools (Read, Write, Bash, Glob, Grep, etc.)
+- BashClaw-specific tools (memory, cron, spawn, agent_message) are bridged via `bashclaw tool <name>` CLI calls
+- Session state tracked in both BashClaw JSONL and Claude Code's native session
+- Hooks bridged via `--settings` JSON injection
+
+**Requirements:** `claude` CLI installed and authenticated (`claude login`).
+
+<details>
+<summary><strong>Claude engine configuration</strong></summary>
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "engine": "claude",
+      "maxTurns": 50
+    },
+    "list": [
+      {
+        "id": "coder",
+        "engine": "claude",
+        "engineModel": "opus",
+        "maxTurns": 30
+      }
+    ]
+  }
+}
+```
+
+| Config Field | Description |
+|-------------|-------------|
+| `engine` | `"claude"` to use Claude Code CLI |
+| `engineModel` | Override model (e.g. `"opus"`, `"sonnet"`, `"haiku"`). If empty, uses your subscription's default. |
+| `maxTurns` | Max agentic turns per invocation |
+
+| Environment Variable | Default | Purpose |
+|---------------------|---------|---------|
+| `ENGINE_CLAUDE_TIMEOUT` | `300` | Timeout (seconds) for Claude CLI execution |
+| `ENGINE_CLAUDE_MODEL` | -- | Override model (alternative to `engineModel` in config) |
+
+</details>
+
+### Builtin Engine
+
+The **builtin** engine calls LLM APIs directly via curl. It supports 18 providers and 25+ pre-configured models, and works with any OpenAI-compatible endpoint.
+
+```sh
+# Builtin is the default engine (no config change needed)
+export ANTHROPIC_API_KEY="sk-ant-..."
+bashclaw agent -m "hello"
+```
+
+**How it works:**
+- Calls provider APIs directly (Anthropic, OpenAI, Google, and 15 more)
+- Runs BashClaw's own tool loop (max iterations configurable via `maxTurns`)
+- Handles context overflow with automatic compaction, model fallback, and session reset
+- Three API formats: Anthropic (`/v1/messages`), OpenAI-compatible (`/v1/chat/completions`), Google (`/v1beta/.../generateContent`)
+
+### Auto Engine
+
+Set `engine` to `"auto"` to let BashClaw detect: uses `claude` if the CLI is installed, otherwise falls back to `builtin`.
+
+```sh
+bashclaw config set '.agents.defaults.engine' '"auto"'
+```
+
+### Tool Mapping (Claude Engine)
+
+When using the Claude engine, BashClaw tools are mapped to Claude Code's native equivalents where possible. Tools without a native counterpart are bridged through the CLI:
+
+| BashClaw Tool | Claude Code Tool | Method |
+|---------------|-----------------|--------|
+| `web_fetch` | WebFetch | native |
+| `web_search` | WebSearch | native |
+| `shell` | Bash | native |
+| `read_file` | Read | native |
+| `write_file` | Write | native |
+| `list_files` | Glob | native |
+| `file_search` | Grep | native |
+| `memory` | -- | `bashclaw tool memory` |
+| `cron` | -- | `bashclaw tool cron` |
+| `agent_message` | -- | `bashclaw tool agent_message` |
+| `spawn` | -- | `bashclaw tool spawn` |
+
+### Mixed Engine Configuration
+
+Different agents can use different engines:
+
+```json
+{
+  "agents": {
+    "defaults": { "engine": "claude" },
+    "list": [
+      {
+        "id": "coder",
+        "engine": "claude",
+        "engineModel": "opus"
+      },
+      {
+        "id": "chat",
+        "engine": "builtin",
+        "model": "gpt-4o"
+      },
+      {
+        "id": "local",
+        "engine": "builtin",
+        "model": "llama-3.3-70b-versatile"
+      }
+    ]
+  }
+}
+```
+
+**Both engines share the same:**
+- Lifecycle hooks (before_agent_start, pre_message, post_message, agent_end)
+- Session persistence (JSONL)
+- Workspace loading (SOUL.md, MEMORY.md, BOOT.md, IDENTITY.md)
+- Security layer (rate limiting, tool policies, RBAC)
+- Config format (`maxTurns`, tool allow/deny lists, tool profiles)
+
 ## Providers
 
 The builtin engine supports 18 providers with data-driven routing. All configuration is in `lib/models.json` -- adding a provider is a JSON entry, no code changes.
@@ -375,144 +513,6 @@ The builtin engine supports three API formats. Most providers use OpenAI-compati
 
 Any service that implements one of these formats works out of the box.
 
-## Engines
-
-BashClaw has a pluggable engine layer that determines how agent tasks are executed. Each agent can use a different engine.
-
-### Claude Engine (Recommended)
-
-The **claude** engine delegates execution to [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code). It reuses your existing Claude subscription -- no API keys needed, no per-token cost.
-
-```sh
-# Set claude as the default engine
-bashclaw config set '.agents.defaults.engine' '"claude"'
-
-# Use it
-bashclaw agent -m "Refactor this function for readability"
-```
-
-**How it works:**
-- Invokes `claude -p --output-format json` as a subprocess
-- Claude Code handles the tool loop with its native tools (Read, Write, Bash, Glob, Grep, etc.)
-- BashClaw-specific tools (memory, cron, spawn, agent_message) are bridged via `bashclaw tool <name>` CLI calls
-- Session state tracked in both BashClaw JSONL and Claude Code's native session
-- Hooks bridged via `--settings` JSON injection
-
-**Requirements:** `claude` CLI installed and authenticated (`claude login`).
-
-<details>
-<summary><strong>Claude engine configuration</strong></summary>
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "engine": "claude",
-      "maxTurns": 50
-    },
-    "list": [
-      {
-        "id": "coder",
-        "engine": "claude",
-        "engineModel": "opus",
-        "maxTurns": 30
-      }
-    ]
-  }
-}
-```
-
-| Config Field | Description |
-|-------------|-------------|
-| `engine` | `"claude"` to use Claude Code CLI |
-| `engineModel` | Override model (e.g. `"opus"`, `"sonnet"`, `"haiku"`). If empty, uses your subscription's default. |
-| `maxTurns` | Max agentic turns per invocation |
-
-| Environment Variable | Default | Purpose |
-|---------------------|---------|---------|
-| `ENGINE_CLAUDE_TIMEOUT` | `300` | Timeout (seconds) for Claude CLI execution |
-| `ENGINE_CLAUDE_MODEL` | -- | Override model (alternative to `engineModel` in config) |
-
-</details>
-
-### Builtin Engine
-
-The **builtin** engine calls LLM APIs directly via curl. It supports 18 providers and 25+ pre-configured models, and works with any OpenAI-compatible endpoint.
-
-```sh
-# Builtin is the default engine (no config change needed)
-export ANTHROPIC_API_KEY="sk-ant-..."
-bashclaw agent -m "hello"
-```
-
-**How it works:**
-- Calls provider APIs directly (Anthropic, OpenAI, Google, and 15 more)
-- Runs BashClaw's own tool loop (max iterations configurable via `maxTurns`)
-- Handles context overflow with automatic compaction, model fallback, and session reset
-- Three API formats: Anthropic (`/v1/messages`), OpenAI-compatible (`/v1/chat/completions`), Google (`/v1beta/.../generateContent`)
-
-### Auto Engine
-
-Set `engine` to `"auto"` to let BashClaw detect: uses `claude` if the CLI is installed, otherwise falls back to `builtin`.
-
-```sh
-bashclaw config set '.agents.defaults.engine' '"auto"'
-```
-
-### Tool Mapping (Claude Engine)
-
-When using the Claude engine, BashClaw tools are mapped to Claude Code's native equivalents where possible. Tools without a native counterpart are bridged through the CLI:
-
-| BashClaw Tool | Claude Code Tool | Method |
-|---------------|-----------------|--------|
-| `web_fetch` | WebFetch | native |
-| `web_search` | WebSearch | native |
-| `shell` | Bash | native |
-| `read_file` | Read | native |
-| `write_file` | Write | native |
-| `list_files` | Glob | native |
-| `file_search` | Grep | native |
-| `memory` | -- | `bashclaw tool memory` |
-| `cron` | -- | `bashclaw tool cron` |
-| `agent_message` | -- | `bashclaw tool agent_message` |
-| `spawn` | -- | `bashclaw tool spawn` |
-
-### Mixed Engine Configuration
-
-Different agents can use different engines:
-
-```json
-{
-  "agents": {
-    "defaults": { "engine": "claude" },
-    "list": [
-      {
-        "id": "coder",
-        "engine": "claude",
-        "engineModel": "opus"
-      },
-      {
-        "id": "chat",
-        "engine": "builtin",
-        "model": "gpt-4o"
-      },
-      {
-        "id": "local",
-        "engine": "builtin",
-        "model": "llama-3.3-70b-versatile"
-      }
-    ]
-  }
-}
-```
-
-**Both engines share the same:**
-- Lifecycle hooks (before_agent_start, pre_message, post_message, agent_end)
-- Session persistence (JSONL)
-- Workspace loading (SOUL.md, MEMORY.md, BOOT.md, IDENTITY.md)
-- Security layer (rate limiting, tool policies, RBAC)
-- Config format (`maxTurns`, tool allow/deny lists, tool profiles)
-
 ## Channels
 
 Each channel is a standalone shell script under `channels/`.
@@ -599,10 +599,10 @@ bashclaw gateway
 +------+------+        +-------+-------+        +-------+-------+
 | http_handler |       | SSRF filter   |        | plugin.sh     |
 | ui/index.html|       | rate limiting |        | skills.sh     |
-| OpenAI API   |       | pairing codes |        | hooks.sh (14) |
-| REST API (9) |       | tool policies |        | autoreply.sh  |
-+--------------+       | RBAC + audit  |        | boot.sh       |
-                       +---------------+        | dedup.sh      |
+| ui/style.css |       | pairing codes |        | hooks.sh (14) |
+| ui/app.js    |       | tool policies |        | autoreply.sh  |
+| REST API (9) |       | RBAC + audit  |        | boot.sh       |
++--------------+       +---------------+        | dedup.sh      |
                                                 +---------------+
 ```
 
@@ -673,7 +673,9 @@ bashclaw/
   gateway/
     http_handler.sh     # HTTP request handler + REST API
   ui/
-    index.html          # single-file SPA (CSS+JS inline, 6 tabs)
+    index.html          # dashboard page
+    style.css           # dark/light theme, responsive
+    app.js              # vanilla JS single-page app
   tools/                # external tool scripts
   tests/
     framework.sh        # test runner
@@ -778,6 +780,7 @@ Config file: `~/.bashclaw/bashclaw.json`
 {
   "agents": {
     "defaults": {
+      "engine": "auto",
       "model": "claude-opus-4-6",
       "maxTurns": 50,
       "contextTokens": 200000,

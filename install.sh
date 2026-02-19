@@ -10,6 +10,7 @@ _INSTALL_DIR="${BASHCLAW_INSTALL_DIR:-${HOME}/.bashclaw/bin}"
 _NO_PATH=false
 _UNINSTALL=false
 _PREFIX=""
+_NEEDS_SHELL_RELOAD=false
 
 # ---- Output helpers ----
 
@@ -223,31 +224,63 @@ _download_bashclaw() {
   _info "Installed to: $install_dir"
 }
 
-_add_to_path() {
+_install_command() {
   local install_dir="$1"
+  local bashclaw_bin="${install_dir}/bashclaw"
 
   if [[ "$_NO_PATH" == "true" ]]; then
-    _info "Skipping PATH modification (--no-path)"
+    _info "Skipping command installation (--no-path)"
     return 0
   fi
 
-  # Check if already in PATH
-  if [[ ":$PATH:" == *":${install_dir}:"* ]]; then
-    _info "Already in PATH"
+  # Already accessible
+  if _is_command_available bashclaw; then
+    local existing
+    existing="$(command -v bashclaw)"
+    if [[ -L "$existing" ]]; then
+      # Update existing symlink
+      ln -sf "$bashclaw_bin" "$existing"
+      _info "Updated symlink: $existing"
+    else
+      _info "bashclaw already in PATH: $existing"
+    fi
     return 0
   fi
 
-  local path_line="export PATH=\"${install_dir}:\$PATH\""
+  # Strategy 1: Symlink to /usr/local/bin (system-wide, always in PATH)
+  if [[ -d "/usr/local/bin" ]] && [[ -w "/usr/local/bin" ]]; then
+    ln -sf "$bashclaw_bin" /usr/local/bin/bashclaw
+    _info "Symlinked to /usr/local/bin/bashclaw"
+    return 0
+  fi
+
+  # Strategy 2: Symlink to ~/.local/bin (XDG standard)
+  local local_bin="${HOME}/.local/bin"
+  mkdir -p "$local_bin"
+  ln -sf "$bashclaw_bin" "${local_bin}/bashclaw"
+  _info "Symlinked to ${local_bin}/bashclaw"
+
+  # If ~/.local/bin is already in PATH, done
+  if [[ ":$PATH:" == *":${local_bin}:"* ]]; then
+    return 0
+  fi
+
+  # Strategy 3: Add ~/.local/bin to shell configs
+  _NEEDS_SHELL_RELOAD=true
+  _add_path_to_shell_configs "$local_bin"
+  export PATH="${local_bin}:$PATH"
+}
+
+_add_path_to_shell_configs() {
+  local dir_to_add="$1"
+  local path_line="export PATH=\"${dir_to_add}:\$PATH\""
   local shell_configs=()
   local os
   os="$(_detect_os)"
 
-  # On macOS (darwin), zsh is the default shell since Catalina.
-  # Always ensure .zshrc exists and has the PATH entry.
   if [[ "$os" == "darwin" ]]; then
     if [[ ! -f "$HOME/.zshrc" ]]; then
       touch "$HOME/.zshrc"
-      _info "Created $HOME/.zshrc (macOS default shell is zsh)"
     fi
     shell_configs+=("$HOME/.zshrc")
   fi
@@ -260,7 +293,6 @@ _add_to_path() {
   elif [[ -f "$HOME/.profile" ]]; then
     shell_configs+=("$HOME/.profile")
   fi
-  # Also pick up .zshrc on non-macOS if it exists
   if [[ "$os" != "darwin" && -f "$HOME/.zshrc" ]]; then
     shell_configs+=("$HOME/.zshrc")
   fi
@@ -281,8 +313,6 @@ _add_to_path() {
     printf '# bashclaw\n%s\n' "$path_line" >> "$HOME/.bashrc"
     _info "Added to PATH in $HOME/.bashrc"
   fi
-
-  export PATH="${install_dir}:$PATH"
 }
 
 _create_default_config() {
@@ -339,12 +369,22 @@ _uninstall() {
   _print "Uninstalling bashclaw..."
 
   local install_dir="$_INSTALL_DIR"
+
+  # Remove symlinks
+  local symlink_path
+  for symlink_path in /usr/local/bin/bashclaw "${HOME}/.local/bin/bashclaw"; do
+    if [[ -L "$symlink_path" ]]; then
+      rm -f "$symlink_path"
+      _info "Removed symlink: $symlink_path"
+    fi
+  done
+
   if [[ -d "$install_dir" ]]; then
     rm -rf "$install_dir"
     _info "Removed: $install_dir"
   fi
 
-  # Remove PATH entries from shell configs (only remove the bashclaw PATH block)
+  # Remove PATH entries from shell configs (backward compatibility with old installs)
   local rc
   for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.profile"; do
     if [[ -f "$rc" ]] && grep -qF "# bashclaw" "$rc" 2>/dev/null; then
@@ -377,14 +417,11 @@ _verify_install() {
 }
 
 _print_instructions() {
+  local needs_reload="${_NEEDS_SHELL_RELOAD:-false}"
   local os
   os="$(_detect_os)"
-  local shell_rc="\$HOME/.bashrc"
-  if [[ "$os" == "darwin" ]]; then
-    shell_rc="\$HOME/.zshrc"
-  fi
 
-  cat <<EOF
+  cat <<'EOF'
 
   =============================================
     bashclaw installed successfully!
@@ -392,25 +429,39 @@ _print_instructions() {
 
   Quick start:
 
-    1. Reload your shell (or open a new terminal):
-       source ${shell_rc}
+    bashclaw gateway
+    # Open http://localhost:18789 in your browser
 
-    2. Set your API key:
-       export ANTHROPIC_API_KEY='sk-ant-...'
+  Or in CLI mode:
 
-    3. Start chatting:
-       bashclaw agent -i
+    bashclaw agent -m "hello"
+
+  Engine options:
+
+    # Claude Code CLI (recommended, reuses subscription):
+    bashclaw config set '.agents.defaults.engine' '"claude"'
+
+    # Builtin (direct API, 18 providers):
+    export ANTHROPIC_API_KEY='sk-ant-...'
 
   Other commands:
 
     bashclaw onboard          # Interactive setup wizard
     bashclaw doctor           # Diagnose issues
-    bashclaw gateway          # Start multi-channel gateway
     bashclaw daemon install   # Run as background service
 
   Documentation: https://github.com/shareAI-lab/bashclaw
 
 EOF
+
+  if [[ "$needs_reload" == "true" ]]; then
+    local shell_rc="\$HOME/.bashrc"
+    if [[ "$os" == "darwin" ]]; then
+      shell_rc="\$HOME/.zshrc"
+    fi
+    _warn "PATH was added to shell config. Reload first:"
+    _warn "  source ${shell_rc}  (or open a new terminal)"
+  fi
 }
 
 # ---- Main ----
@@ -472,7 +523,7 @@ main() {
 
   # Download and install
   _download_bashclaw "$_INSTALL_DIR"
-  _add_to_path "$_INSTALL_DIR"
+  _install_command "$_INSTALL_DIR"
   _create_default_config
   _verify_install "$_INSTALL_DIR"
 
