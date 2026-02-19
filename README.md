@@ -46,30 +46,64 @@ cd bashclaw && ./bashclaw doctor
 
 ## Quick Start
 
-### Recommended: Claude Code CLI Engine
-
-If you have a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) subscription (Pro/Max/Team/Enterprise), BashClaw can use it directly as its backend -- no API keys, no per-token cost:
+### 1. Start the Gateway
 
 ```sh
-bashclaw config set '.agents.defaults.engine' '"claude"'
-
-bashclaw agent -m "What is the mass of the sun?"   # one-shot
-bashclaw agent -i                                    # interactive REPL
+bashclaw gateway
 ```
 
-This delegates all reasoning and tool execution to the `claude` CLI, reusing your existing subscription.
+Open `http://localhost:18789` in your browser. If no API key is configured, a first-run setup overlay guides you through it.
 
-### Alternative: Builtin Engine with API Keys
+### 2. Choose an Engine
 
-For other providers or if you prefer direct API access:
+<table>
+<tr><th>Claude Code CLI (Recommended)</th><th>Builtin (Direct API)</th></tr>
+<tr>
+<td>
+
+Reuses your Claude subscription -- no API keys, no per-token cost.
 
 ```sh
-export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY, GOOGLE_API_KEY, etc.
+bashclaw config set \
+  '.agents.defaults.engine' '"claude"'
+```
 
+Requires: [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated.
+
+</td>
+<td>
+
+Calls LLM APIs directly via curl. Supports 18 providers.
+
+```sh
+export ANTHROPIC_API_KEY="sk-ant-..."
+# or set via web dashboard
+```
+
+</td>
+</tr>
+</table>
+
+### 3. Connect Channels (Optional)
+
+Add always-on messaging through Telegram, Discord, Slack, or Feishu. Channels auto-start with the gateway:
+
+```sh
+# Example: Telegram
+bashclaw config set '.channels.telegram.botToken' '"BOT_TOKEN"'
+bashclaw config set '.channels.telegram.enabled' 'true'
+bashclaw gateway   # web + Telegram both active
+```
+
+See [Channels](#channels) for all platforms.
+
+### 4. CLI Mode (Power Users)
+
+For scripting, automation, or SSH sessions:
+
+```sh
 bashclaw agent -m "What is the mass of the sun?"   # one-shot
 bashclaw agent -i                                    # interactive REPL
-bashclaw onboard                                     # guided setup wizard
-bashclaw gateway                                     # web dashboard + channels
 ```
 
 ## Why BashClaw
@@ -106,12 +140,11 @@ BashClaw targets Bash 3.2 deliberately: no `declare -A`, no `mapfile`, no `|&`. 
 
 ## Features
 
-- **Pure shell** -- Zero dependencies beyond bash 3.2, curl, jq. Already on your machine.
-- **Self-modifying** -- Agent hot-patches its own source at runtime. No compilation step.
+- **Web dashboard** -- Built-in browser UI for chat, config, and monitoring. First-run setup wizard. No external tools.
+- **Multi-channel** -- Telegram, Discord, Slack, Feishu/Lark. Each channel is one shell script. Auto-starts with gateway.
 - **Dual engine** -- Claude Code CLI (reuses subscription) or builtin (direct API via curl). Per-agent configurable.
 - **Multi-provider** -- 18 providers: Claude, GPT, Gemini, DeepSeek, Qwen, Zhipu, Moonshot, MiniMax, Groq, xAI, Mistral, Ollama, vLLM, and more.
-- **Multi-channel** -- Telegram, Discord, Slack, Feishu/Lark. Each channel is one shell script.
-- **Web dashboard** -- Built-in browser UI for chat, config, and monitoring. No external tools.
+- **Pure shell** -- Zero dependencies beyond bash 3.2, curl, jq. Already on your machine.
 - **14 built-in tools** -- Web fetch, search, shell exec, memory, cron, file I/O, inter-agent messaging.
 - **Plugin system** -- 4 discovery paths. Register tools, hooks, commands, providers.
 - **8-layer security** -- SSRF protection, command filters, pairing codes, rate limiting, RBAC, audit.
@@ -153,14 +186,15 @@ bashclaw gateway
 **Logs** -- Live log viewer with level filtering.
 **First-run** -- If no API key is set, shows a setup overlay on first visit.
 
-### Web + CLI Dual Mode
+### Web + Channels + CLI
 
-Both modes share the same config, sessions, and state. Changes in the dashboard take effect in CLI immediately, and vice versa.
+All three modes share the same config, sessions, and state. Changes in one take effect in the others immediately.
 
 | Mode | Best For | Command |
 |------|----------|---------|
-| Web | First-time setup, visual config, casual chat | `bashclaw gateway` |
-| CLI | Automation, scripting, SSH, power users | `bashclaw agent -i` |
+| Web | First-time setup, visual config, casual chat | `bashclaw gateway` then open browser |
+| Channels | Always-on team bot, mobile access | `bashclaw gateway` with channels enabled |
+| CLI | Automation, scripting, SSH, CI/CD | `bashclaw agent -m "..."` or `bashclaw agent -i` |
 
 ### REST API
 
@@ -780,19 +814,29 @@ Config file: `~/.bashclaw/bashclaw.json`
 
 ## Use Cases
 
-**Personal assistant on a Mac**
+**Web dashboard on a Mac**
 ```sh
-export ANTHROPIC_API_KEY="sk-ant-..."
-bashclaw agent -i
-# No Python, no Node, no Docker. Just works.
+bashclaw gateway
+# Open http://localhost:18789 -- first-run wizard configures API keys
+# Chat with the agent in your browser immediately
 ```
 
-**Headless server agent**
+**Multi-channel team bot**
+```sh
+# One agent, multiple channels -- all served by a single gateway
+bashclaw config set '.channels.telegram.enabled' 'true'
+bashclaw config set '.channels.discord.enabled' 'true'
+bashclaw config set '.channels.slack.enabled' 'true'
+bashclaw gateway
+# Messages from all platforms routed to the same agent
+```
+
+**Always-on server agent**
 ```sh
 # Install on a fresh Ubuntu server
 curl -fsSL .../install.sh | bash
 bashclaw daemon install --enable
-# Agent runs 24/7, accessible via Telegram or web dashboard
+# Agent runs 24/7, accessible via Telegram, Discord, Slack, or web dashboard
 ```
 
 **CI/CD pipeline agent**
@@ -801,14 +845,10 @@ bashclaw daemon install --enable
 bashclaw agent -m "Review this diff and suggest improvements" < diff.patch
 ```
 
-**Multi-channel team bot**
+**SSH / headless CLI**
 ```sh
-# One agent, multiple channels
-bashclaw config set '.channels.telegram.enabled' 'true'
-bashclaw config set '.channels.discord.enabled' 'true'
-bashclaw config set '.channels.slack.enabled' 'true'
-bashclaw gateway
-# Messages from all platforms routed to the same agent
+bashclaw agent -i
+# Interactive REPL for power users. No browser needed.
 ```
 
 ## Testing

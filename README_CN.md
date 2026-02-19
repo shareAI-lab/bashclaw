@@ -46,30 +46,64 @@ cd bashclaw && ./bashclaw doctor
 
 ## 快速开始
 
-### 推荐: Claude Code CLI 引擎
-
-如果你有 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 订阅 (Pro/Max/Team/Enterprise),BashClaw 可以直接使用它作为后端 -- 无需 API 密钥,无按量付费:
+### 1. 启动 Gateway
 
 ```sh
-bashclaw config set '.agents.defaults.engine' '"claude"'
-
-bashclaw agent -m "太阳的质量是多少?"    # 单次问答
-bashclaw agent -i                        # 交互式 REPL
+bashclaw gateway
 ```
 
-这会将所有推理和工具执行委托给 `claude` CLI,复用你现有的订阅额度。
+在浏览器中打开 `http://localhost:18789`。如果尚未配置 API 密钥,首次访问会显示引导式配置界面。
 
-### 备选: Builtin 引擎 + API 密钥
+### 2. 选择引擎
 
-使用其他提供者或偏好直接 API 访问时:
+<table>
+<tr><th>Claude Code CLI (推荐)</th><th>Builtin (直接调用 API)</th></tr>
+<tr>
+<td>
+
+复用你的 Claude 订阅 -- 无需 API 密钥,无按量付费。
 
 ```sh
-export ANTHROPIC_API_KEY="sk-ant-..."   # 或 OPENAI_API_KEY, GOOGLE_API_KEY 等
+bashclaw config set \
+  '.agents.defaults.engine' '"claude"'
+```
 
+前置要求: 已安装 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 并完成认证。
+
+</td>
+<td>
+
+通过 curl 直接调用 LLM API。支持 18 个提供者。
+
+```sh
+export ANTHROPIC_API_KEY="sk-ant-..."
+# 或通过 Web 控制台设置
+```
+
+</td>
+</tr>
+</table>
+
+### 3. 接入消息频道 (可选)
+
+通过 Telegram、Discord、Slack 或飞书接入始终在线的消息服务。频道随 Gateway 自动启动:
+
+```sh
+# 示例: Telegram
+bashclaw config set '.channels.telegram.botToken' '"BOT_TOKEN"'
+bashclaw config set '.channels.telegram.enabled' 'true'
+bashclaw gateway   # Web 控制台 + Telegram 同时运行
+```
+
+详见[消息频道](#消息频道)章节。
+
+### 4. CLI 模式 (高级用户)
+
+用于脚本、自动化或 SSH 会话:
+
+```sh
 bashclaw agent -m "太阳的质量是多少?"    # 单次问答
 bashclaw agent -i                        # 交互式 REPL
-bashclaw onboard                         # 引导式安装向导
-bashclaw gateway                         # Web 控制台 + 频道
 ```
 
 ## 为什么选 BashClaw
@@ -106,12 +140,11 @@ BashClaw 刻意以 Bash 3.2 为目标: 不用 `declare -A`、不用 `mapfile`、
 
 ## 特性
 
-- **纯 Shell** -- 仅依赖 bash 3.2, curl, jq。你的机器上已经有了。
-- **自修改** -- 智能体在运行时热修改自身源代码。无编译步骤。
+- **Web 控制台** -- 内置浏览器界面,用于聊天、配置和监控。首次引导向导。无需外部工具。
+- **多频道** -- Telegram, Discord, Slack, 飞书/Lark。每个频道是一个 Shell 脚本。随 Gateway 自动启动。
 - **双引擎** -- Claude Code CLI (复用订阅) 或 builtin (curl 直接调用 API)。按智能体独立配置。
 - **多提供者** -- 18 个提供者: Claude, GPT, Gemini, DeepSeek, 通义千问, 智谱, Moonshot, MiniMax, Groq, xAI, Mistral, Ollama, vLLM 等。
-- **多频道** -- Telegram, Discord, Slack, 飞书/Lark。每个频道是一个 Shell 脚本。
-- **Web 控制台** -- 内置浏览器界面,用于聊天、配置和监控。无需外部工具。
+- **纯 Shell** -- 仅依赖 bash 3.2, curl, jq。你的机器上已经有了。
 - **14 个内置工具** -- Web 抓取、搜索、Shell 执行、记忆、定时任务、文件 I/O、智能体间通信。
 - **插件系统** -- 4 个发现路径。可注册工具、钩子、命令、提供者。
 - **8 层安全模型** -- SSRF 防护、命令过滤、配对码、限流、RBAC、审计。
@@ -150,14 +183,15 @@ bashclaw gateway
 **状态** -- 网关状态、活跃会话、提供者信息。
 **首次引导** -- 如果没有配置 API 密钥,首次访问会显示配置引导。
 
-### Web + CLI 双模式
+### Web + 频道 + CLI
 
-两种模式共享相同的配置、会话和状态。控制台中的更改立即在 CLI 中生效,反之亦然。
+三种模式共享相同的配置、会话和状态。任一模式中的更改立即在其他模式中生效。
 
 | 模式 | 适用场景 | 命令 |
 |------|----------|------|
-| Web | 首次配置、可视化管理、日常聊天 | `bashclaw gateway` |
-| CLI | 自动化、脚本、SSH 会话、高级用户 | `bashclaw agent -i` |
+| Web | 首次配置、可视化管理、日常聊天 | `bashclaw gateway` 然后打开浏览器 |
+| 频道 | 始终在线的团队机器人、移动端访问 | `bashclaw gateway` 并启用频道 |
+| CLI | 自动化、脚本、SSH、CI/CD | `bashclaw agent -m "..."` 或 `bashclaw agent -i` |
 
 ### REST API
 
@@ -779,19 +813,29 @@ plugin_register_provider "my_llm" "My LLM" '["model-a"]' '{"envKey":"MY_KEY"}'
 
 ## 使用场景
 
-**Mac 上的个人助手**
+**Mac 上的 Web 控制台**
 ```sh
-export ANTHROPIC_API_KEY="sk-ant-..."
-bashclaw agent -i
-# 不需要 Python、Node、Docker。直接运行。
+bashclaw gateway
+# 打开 http://localhost:18789 -- 首次引导向导配置 API 密钥
+# 在浏览器中直接与智能体对话
 ```
 
-**无头服务器智能体**
+**多频道团队机器人**
+```sh
+# 一个智能体,多个频道 -- 由同一个 Gateway 提供服务
+bashclaw config set '.channels.telegram.enabled' 'true'
+bashclaw config set '.channels.discord.enabled' 'true'
+bashclaw config set '.channels.slack.enabled' 'true'
+bashclaw gateway
+# 所有平台的消息路由到同一个智能体
+```
+
+**始终在线的服务器智能体**
 ```sh
 # 在全新 Ubuntu 服务器上安装
 curl -fsSL .../install.sh | bash
 bashclaw daemon install --enable
-# 智能体 7x24 运行,通过 Telegram 或 Web 控制台访问
+# 智能体 7x24 运行,通过 Telegram、Discord、Slack 或 Web 控制台访问
 ```
 
 **CI/CD 流水线智能体**
@@ -800,14 +844,10 @@ bashclaw daemon install --enable
 bashclaw agent -m "审查这个 diff 并提出改进建议" < diff.patch
 ```
 
-**多频道团队机器人**
+**SSH / 无头 CLI**
 ```sh
-# 一个智能体,多个频道
-bashclaw config set '.channels.telegram.enabled' 'true'
-bashclaw config set '.channels.discord.enabled' 'true'
-bashclaw config set '.channels.slack.enabled' 'true'
-bashclaw gateway
-# 所有平台的消息路由到同一个智能体
+bashclaw agent -i
+# 高级用户的交互式 REPL。无需浏览器。
 ```
 
 ## 测试
